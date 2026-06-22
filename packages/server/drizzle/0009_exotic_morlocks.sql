@@ -1,0 +1,1 @@
+ALTER TABLE `loops` ADD `edit_request` text;

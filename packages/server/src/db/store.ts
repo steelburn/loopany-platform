@@ -1,0 +1,321 @@
+/**
+ * Data-access layer over Drizzle — replaces c0's file-per-job store. Keeps the
+ * synchronous, function-style API c0's scheduler expects (better-sqlite3 is
+ * synchronous), but persistence is now relational: loops and runs are separate
+ * tables, and `owner: PeerRef` is gone (→ `userId` + `machineId`).
+ *
+ * Using Drizzle (not raw SQL) keeps a future Supabase/Postgres switch a dialect
+ * swap, not a rewrite.
+ */
+import { randomUUID } from "node:crypto";
+import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+
+import { db } from "./index.js";
+import {
+  loops,
+  machines,
+  runs,
+  teams,
+  teamMembers,
+  notificationChannels,
+  type Loop,
+  type Machine,
+  type NewLoop,
+  type NewMachine,
+  type NewRun,
+  type NotificationChannel,
+  type NewNotificationChannel,
+  type Run,
+  type StateField,
+  type Team,
+} from "./schema.js";
+
+// ---- coercion helpers (carried from c0 store.ts) ----
+
+/** Coerce an untrusted value into clean StateField[]; undefined if empty. */
+export function coerceStateSchema(raw: unknown): StateField[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: StateField[] = [];
+  for (const f of raw) {
+    if (f && typeof f.key === "string" && f.key.trim()) {
+      out.push({
+        key: f.key.trim(),
+        ...(typeof f.label === "string" && f.label.trim() ? { label: f.label.trim() } : {}),
+        ...(typeof f.unit === "string" && f.unit.trim() ? { unit: f.unit.trim() } : {}),
+      });
+    }
+  }
+  return out.length ? out : undefined;
+}
+
+const UI_MAX_LEN = 20_000;
+
+/** Trim + length-bound a `ui` template (storage guard; render-time sanitizes XSS). */
+export function coerceUi(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const s = raw.trim().slice(0, UI_MAX_LEN);
+  return s ? s : undefined;
+}
+
+/** Any loop can evolve: the evolve pass bootstraps schema/ui/workflow from run
+ *  data, so a plain task loop is a prime candidate (turn repeated work into a
+ *  gate, add a dashboard). The "enough data to learn from" throttle lives on the
+ *  auto path (`maybeFlagEvolve`'s run-count gate); manual evolve is unrestricted. */
+export function canEvolve(_loop: Loop): boolean {
+  return true;
+}
+
+export function newLoopId(): string {
+  return `loop-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+// ---- loops ----
+
+export function listLoops(teamId?: string): Loop[] {
+  const q = db.select().from(loops);
+  return (teamId ? q.where(eq(loops.teamId, teamId)) : q).all();
+}
+
+export function listEnabledLoops(): Loop[] {
+  return db.select().from(loops).where(eq(loops.enabled, true)).all();
+}
+
+export function getLoop(id: string): Loop | undefined {
+  return db.select().from(loops).where(eq(loops.id, id)).get();
+}
+
+/** Loops bound to a machine — gates machine deletion (must be empty first). */
+export function loopsForMachine(machineId: string): Loop[] {
+  return db.select().from(loops).where(eq(loops.machineId, machineId)).all();
+}
+
+export function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "updatedAt"> & { id?: string }): Loop {
+  const ts = nowIso();
+  const row: NewLoop = { ...input, id: input.id ?? newLoopId(), createdAt: ts, updatedAt: ts };
+  return db.insert(loops).values(row).returning().get();
+}
+
+/** Partial update; stamps updatedAt. Returns the fresh row (or undefined if gone). */
+export function updateLoop(id: string, patch: Partial<NewLoop>): Loop | undefined {
+  db.update(loops)
+    .set({ ...patch, updatedAt: nowIso() })
+    .where(eq(loops.id, id))
+    .run();
+  return getLoop(id);
+}
+
+export function deleteLoop(id: string): boolean {
+  const r = db.delete(loops).where(eq(loops.id, id)).run();
+  return r.changes > 0;
+}
+
+// ---- runs ----
+
+export function addRun(input: Omit<NewRun, "id"> & { id?: string }): Run {
+  const row: NewRun = { ...input, id: input.id ?? randomUUID() };
+  return db.insert(runs).values(row).returning().get();
+}
+
+export function getRun(id: string): Run | undefined {
+  return db.select().from(runs).where(eq(runs.id, id)).get();
+}
+
+export function updateRun(id: string, patch: Partial<NewRun>): Run | undefined {
+  db.update(runs).set(patch).where(eq(runs.id, id)).run();
+  return getRun(id);
+}
+
+/** Newest-last run history for a loop (chronological), capped. */
+export function listRuns(loopId: string, limit = 30): Run[] {
+  const rows = db
+    .select()
+    .from(runs)
+    .where(eq(runs.loopId, loopId))
+    .orderBy(desc(runs.ts))
+    .limit(limit)
+    .all();
+  return rows.reverse();
+}
+
+/** One older page: runs strictly before `beforeTs`, newest-first then capped,
+ *  returned chronological (oldest-first) to match listRuns. Cursor-based (by ts,
+ *  not offset) so it's stable while new runs land at the head. */
+export function listRunsBefore(loopId: string, beforeTs: string, limit = 16): Run[] {
+  const rows = db
+    .select()
+    .from(runs)
+    .where(and(eq(runs.loopId, loopId), lt(runs.ts, beforeTs)))
+    .orderBy(desc(runs.ts))
+    .limit(limit)
+    .all();
+  return rows.reverse();
+}
+
+export function lastRun(loopId: string): Run | undefined {
+  return db.select().from(runs).where(eq(runs.loopId, loopId)).orderBy(desc(runs.ts)).limit(1).get();
+}
+
+/** Timestamp of this loop's most recent evolve run (any phase) — gates the
+ *  once-per-day auto-evolve cap. Null ⇒ never evolved. */
+export function lastEvolveAt(loopId: string): string | null {
+  const r = db
+    .select({ ts: runs.ts })
+    .from(runs)
+    .where(and(eq(runs.loopId, loopId), eq(runs.role, "evolve")))
+    .orderBy(desc(runs.ts))
+    .limit(1)
+    .get();
+  return r?.ts ?? null;
+}
+
+export function countRuns(loopId: string): number {
+  const r = db.select({ n: sql<number>`count(*)` }).from(runs).where(eq(runs.loopId, loopId)).get();
+  return r?.n ?? 0;
+}
+
+/** Open runs (pending/running) — used by the timeout-reclaim sweep. */
+export function openRuns(): Run[] {
+  return db.select().from(runs).where(inArray(runs.phase, ["pending", "running"])).all();
+}
+
+/** Is a run for this loop still open (drives the "skip overlapping tick" guard)? */
+export function hasOpenRun(loopId: string): boolean {
+  const r = db
+    .select({ id: runs.id })
+    .from(runs)
+    .where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])))
+    .limit(1)
+    .get();
+  return !!r;
+}
+
+// ---- machines ----
+
+export function listMachines(teamId?: string): Machine[] {
+  const q = db.select().from(machines);
+  return (teamId ? q.where(eq(machines.teamId, teamId)) : q).all();
+}
+
+export function getMachine(id: string): Machine | undefined {
+  return db.select().from(machines).where(eq(machines.id, id)).get();
+}
+
+export function createMachine(input: Omit<NewMachine, "createdAt"> & { id: string }): Machine {
+  return db.insert(machines).values({ ...input, createdAt: nowIso() }).returning().get();
+}
+
+export function updateMachine(id: string, patch: Partial<NewMachine>): Machine | undefined {
+  db.update(machines).set(patch).where(eq(machines.id, id)).run();
+  return getMachine(id);
+}
+
+export function deleteMachine(id: string): boolean {
+  const r = db.delete(machines).where(eq(machines.id, id)).run();
+  return r.changes > 0;
+}
+
+export function setMachineOnline(id: string, online: boolean): void {
+  db.update(machines).set({ online, lastSeen: nowIso() }).where(eq(machines.id, id)).run();
+}
+
+// ---- teams ----
+
+/** Deterministic personal-team id for a user (open mode ⇒ the shared "team-shared"). */
+export function teamIdForUser(userId: string | null | undefined): string {
+  return `team-${userId ?? "shared"}`;
+}
+
+// Per-process memo so the hot path (every requestScope) doesn't re-issue an
+// INSERT OR IGNORE once a team is known to exist.
+const ensuredTeams = new Set<string>();
+
+/** Idempotently create a team (+ owner membership) if absent, and keep an owned
+ *  team's name in sync with `name` (renames pre-existing teams to the current
+ *  email-derived default). Memoized ⇒ at most one reconcile per team per process. */
+export function ensureTeam(id: string, name: string, ownerUserId: string | null): void {
+  if (ensuredTeams.has(id)) return;
+  const ts = nowIso();
+  db.insert(teams).values({ id, name, ownerUserId, createdAt: ts }).onConflictDoNothing().run();
+  if (ownerUserId) {
+    db.insert(teamMembers)
+      .values({ id: `${id}:${ownerUserId}`, teamId: id, userId: ownerUserId, role: "owner", createdAt: ts })
+      .onConflictDoNothing()
+      .run();
+    // Rename to the current default when it drifted (no-op once it matches).
+    db.update(teams).set({ name }).where(and(eq(teams.id, id), ne(teams.name, name))).run();
+  }
+  ensuredTeams.add(id);
+}
+
+export function getTeam(id: string): Team | undefined {
+  return db.select().from(teams).where(eq(teams.id, id)).get();
+}
+
+/** Teams the user belongs to (membership join), newest first. Drives the team
+ *  switcher — a regular user has just their personal team (no dropdown). */
+export function listTeamsForUser(userId: string): Team[] {
+  return db
+    .select({ t: teams })
+    .from(teamMembers)
+    .innerJoin(teams, eq(teamMembers.teamId, teams.id))
+    .where(eq(teamMembers.userId, userId))
+    .orderBy(desc(teams.createdAt))
+    .all()
+    .map((r) => r.t);
+}
+
+/** Every team — superadmin-only cross-team visibility. */
+export function listAllTeams(): Team[] {
+  return db.select().from(teams).orderBy(desc(teams.createdAt)).all();
+}
+
+/** Whether the user is a member of the team (authorizes a team-switch request). */
+export function isTeamMember(teamId: string, userId: string): boolean {
+  return !!db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)))
+    .get();
+}
+
+// ---- notification channels ----
+
+export function listChannels(teamId: string): NotificationChannel[] {
+  return db
+    .select()
+    .from(notificationChannels)
+    .where(eq(notificationChannels.teamId, teamId))
+    .orderBy(desc(notificationChannels.createdAt))
+    .all();
+}
+
+export function getChannel(id: string): NotificationChannel | undefined {
+  return db.select().from(notificationChannels).where(eq(notificationChannels.id, id)).get();
+}
+
+/** The channel a new loop auto-routes to when none is picked — the team's newest
+ *  (listChannels is newest-first), or null when the team has none. */
+export function defaultChannelId(teamId: string): string | null {
+  return listChannels(teamId)[0]?.id ?? null;
+}
+
+export function createChannel(input: Omit<NewNotificationChannel, "id" | "createdAt"> & { id?: string }): NotificationChannel {
+  const row: NewNotificationChannel = {
+    ...input,
+    id: input.id ?? `ch-${randomUUID().slice(0, 12)}`,
+    createdAt: nowIso(),
+  };
+  return db.insert(notificationChannels).values(row).returning().get();
+}
+
+export function deleteChannel(id: string): boolean {
+  // Detach any loops pointing at it so they fall back to dashboard-only (no dangling ref).
+  db.update(loops).set({ channelId: null, updatedAt: nowIso() }).where(eq(loops.channelId, id)).run();
+  const r = db.delete(notificationChannels).where(eq(notificationChannels.id, id)).run();
+  return r.changes > 0;
+}
+

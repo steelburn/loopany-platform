@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.output/
+.tanstack/
+.nitro/
+.vinxi/
+.env
+.env.local
+*.log
+
+# local SQLite (the data dir / Fly volume lives outside the repo anyway)
+*.db
+*.db-wal
+*.db-shm
+
+# local runtime artifacts (daemon shim, downloaded delivery prompts, scratch task files)
+.loopany/
+/loopany/

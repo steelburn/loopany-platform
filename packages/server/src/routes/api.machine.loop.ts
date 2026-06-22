@@ -1,0 +1,43 @@
+import { createFileRoute } from '@tanstack/react-router'
+
+/** Bearer device token from the request (the machine's persisted ~/.loopany token). */
+function deviceToken(request: Request): string {
+  const auth = request.headers.get('authorization') ?? ''
+  return auth.startsWith('Bearer ') ? auth.slice(7) : ''
+}
+
+/**
+ * /api/machine/loop — the machine's authenticated loop channel (Bearer device token):
+ *   POST   Claude Code creates a loop (paste-forward New Loop)
+ *   GET    list the loops bound to this machine (`loopany loops`)
+ *   PATCH  edit a loop's scheduling envelope (`loopany edit`)
+ */
+export const Route = createFileRoute('/api/machine/loop')({
+  server: {
+    handlers: {
+      POST: async ({ request }: { request: Request }) => {
+        const token = deviceToken(request)
+        if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
+        const body = await request.json().catch(() => ({}))
+        const { getGateway } = await import('../server/boot.js')
+        const r = getGateway().createLoop(token, body)
+        return Response.json(r.body, { status: r.status })
+      },
+      GET: async ({ request }: { request: Request }) => {
+        const token = deviceToken(request)
+        if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
+        const { getGateway } = await import('../server/boot.js')
+        const r = getGateway().listLoops(token)
+        return Response.json(r.body, { status: r.status })
+      },
+      PATCH: async ({ request }: { request: Request }) => {
+        const token = deviceToken(request)
+        if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
+        const body = (await request.json().catch(() => ({}))) as { id?: unknown; patch?: Record<string, unknown> }
+        const { getGateway } = await import('../server/boot.js')
+        const r = getGateway().editLoop(token, body.id, body.patch ?? {})
+        return Response.json(r.body, { status: r.status })
+      },
+    },
+  },
+})
