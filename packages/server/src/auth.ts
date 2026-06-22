@@ -26,12 +26,13 @@ const allowlist = (process.env.LOOPANY_ALLOWED_LOGINS || "")
   .filter(Boolean);
 
 /**
- * Superadmins see every team and every team's loops. `shitianxin@gmail.com` is
- * seeded so cross-team admin works out of the box; LOOPANY_SUPERADMINS (comma-
- * separated emails) extends the set.
+ * Superadmins see every team and every team's loops. The set is driven entirely
+ * by LOOPANY_SUPERADMINS (comma-separated emails) — set it in your host / Fly
+ * secrets. Empty ⇒ no superadmins.
  */
 const superAdmins = new Set(
-  ["shitianxin@gmail.com", ...(process.env.LOOPANY_SUPERADMINS || "").split(",")]
+  (process.env.LOOPANY_SUPERADMINS || "")
+    .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean),
 );
