@@ -61,9 +61,10 @@ SQLite on a volume. See `fly.toml` for the setup commands. Build = nitro
 - **Auth** is off by default (open). Set `GITHUB_CLIENT_ID/SECRET` +
   `LOOPANY_ALLOWED_LOGINS` to gate the dashboard behind GitHub login.
 - **Push channels** are configured per team in the dashboard (the **Notifications**
-  modal), not via global env. Each team can add Telegram / Slack / Feishu channels;
-  a loop routes its results to one of them (or to the dashboard only). Channel
-  secrets are stored server-side per team, never in environment variables.
+  modal), not via global env. Each team can add Telegram or Feishu channels; a loop
+  routes its results to one of them (or to the dashboard only). Slack is also a
+  supported delivery transport but has no UI add-form yet. Channel secrets are
+  stored server-side per team, never in environment variables.
 
 See [`.env.example`](.env.example) for all variables.
 
