@@ -15,7 +15,7 @@ LoopAny takes only c0's **loop management + scheduling + execution** core, cutti
 
 | Cut | Kept and migrated |
 |---|---|
-| Layer 1 IM Gateway (WeChat/Feishu/telegram/xiaozhi) | `scheduler/` core (store / control / workflow / loop-prompt / templates / recipes / shim / exec-env) |
+| Layer 1 IM Gateway (WeChat/Feishu/telegram/xiaozhi) | `scheduler/` core (store / control / workflow / loop-prompt / templates / shim / exec-env) |
 | Layer 2 pi entry agent (no built-in agent, all BYOA) | `web/` frontend (dashboard / LoopCard / generative UI rendering / binding) |
 | memory / history / sessions / skills / compaction | LoopJob data model, croner scheduling, generative UI / evolution mechanism |
 | `owner: PeerRef` / `sendDirect` / `enterAgent` / legacy pi paths | the "how to call claude" knowledge in `handoff/claude.ts` - but the execution point moves to the user's machine |
@@ -235,7 +235,7 @@ Reclaim: machine took the delivery but no report within timeoutMs+grace (default
 
 - **P0 skeleton**: pnpm monorepo (`packages/server` ports web+scheduler and strips out IM/agent/gateway/memory; `packages/daemon` an empty shell). **Drizzle schema (machines/loops/runs) + Better Auth (Drizzle adapter, provider sqlite) + GitHub + login allowlist**. Scheduler runs cron in-process + runs table persisted. dashboard read + machine-binding UI (sign token / configure roots).
 - **P1 BYOA execution (exec)**: daemon (WS + single-instance lock + workflow harness + spawn claude + loopany shim) + the server's WS gateway / agent-api (control ported) / `/machine/report` + machine jail. Run one exec loop end-to-end on a single machine.
-- **P2 AI-First + evolution (draft + evolve)**: conversational compose/edit UX + `role=draft` delivery + server-side recipe directory + generative UI rendering + evolution state machine (`role=evolve`).
+- **P2 AI-First + evolution (draft + evolve)**: conversational compose/edit UX + `role=draft` delivery + server-side recipe directory + generative UI rendering + evolution state machine (`role=evolve`). (**`role=draft` delivery + the recipe directory were dropped → D5**, replaced by capture-from-Claude-Code; evolve kept.)
 - **P3 closed-loop polish**: Slack notifications, timeout reclaim, machine online/offline UI, run detail card, "Evolve now" / run-now / pause buttons.
 - **P4 onto Fly**: Dockerfile + fly.toml (single instance + volume + `min_machines_running=1`) + secrets (GitHub OAuth, Slack token, Better Auth secret) + GitHub OAuth App configuration.
 
