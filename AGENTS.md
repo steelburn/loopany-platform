@@ -90,8 +90,9 @@ LLM and executes no user code**.
 - **Artifact live-sync Phase 2 (web Files view) + Phase 3 (per-run diff).** Read-only,
   built on Phase 1. **Phase 2:** lazy-by-id server fns `getArtifacts`/`getArtifact`
   (`server/loopApi.ts`) → pure helpers in `server/artifactFiles.ts` (read bytes via
-  `gateway.readBlob`, decode text; binary/oversize → download marker) → `FilesView.tsx`
-  "Files" section in `JobDetailView`. Binary downloads stream from the
+  `gateway.readBlob`, decode text; binary/oversize → download marker) → the unified
+  `LoopFilesPanel.tsx` in `LoopDetailView` (the loop page; see the Unified Files panel
+  bullet below). Binary downloads stream from the
   session-authed, path-safe route `routes/api.artifact.$loopId.$.ts` (splat path;
   team-scoped via the shared `auth.loopInScope` predicate that `ownedLoop` also uses).
   **Phase 3:** `run_snapshots` table (migration `0012`, manifest = path→{hash,size,
@@ -99,7 +100,7 @@ LLM and executes no user code**.
   finalize (`store.buildLoopManifest`); `getRunDiff({runId})` lazily diffs run N vs the
   prior run (`store.prevRunSnapshot`) — unified text diff via the pure-string `diff`
   (jsdiff) lib in `server/runDiff.ts`, size-delta marker for binary/oversize — rendered
-  in `RunView`'s "Changes (N)" section. The daemon flushes a final run-tagged sync
+  in `RunDetailView`'s "Changes (N)" section. The daemon flushes a final run-tagged sync
   before reporting (`watcher.flushLoop` + `runner` `reportRun`) so the snapshot captures
   end-state. Old runs with no snapshot degrade to a calm fallback; zero-exec invariant
   holds (server only stores/reads bytes + computes pure-string diffs).
@@ -120,7 +121,7 @@ LLM and executes no user code**.
   carries it. UI: `ComposeModal` has an agent selector — Codex is **selectable** but
   messaged "recorded — runs via Claude for now"; the snippet carries an `agent:` line;
   `SKILL.md` tells the agent to self-declare via `--agent`. Execution-path copy that
-  truly means Claude (run-now, edit-via-Claude-Code in `JobDetailView`) stays "Claude"
+  truly means Claude (run-now, edit-via-Claude-Code in `LoopDetailView`) stays "Claude"
   on purpose — that IS what runs. Daemon now has vitest (`create.test.ts`) for the
   detector/precedence; server tests cover createLoop persistence + adapter mapping.
 - **CI/CD (`.github/workflows/`).** Two GitHub Actions workflows, deliberately split by
