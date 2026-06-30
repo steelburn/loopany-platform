@@ -124,6 +124,21 @@ describe("runLog", () => {
     expect(cap.stdout()).not.toContain("recent run");
   });
 
+  test("--json before the loop id keeps the id positional (boolean flag, no swallow)", async () => {
+    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: null, error: null, message: null, transcript: "", transcriptTruncated: false }];
+    const { fetchFn, calls } = stubFetch({
+      "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
+      "/api/machine/log": { body: { ok: true, name: "X", runs } },
+    });
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    // --json must NOT consume "loop-x" as its value; the id stays positional.
+    expect(await runLog(["--json", "loop-x"], cap)).toBe(0);
+    expect(calls.some((u) => u.includes("loopId=loop-x"))).toBe(true);
+    // json mode still active → raw JSON, not the human header.
+    expect(cap.stdout()).toContain('"id": "r1"');
+    expect(cap.stdout()).not.toContain("recent run");
+  });
+
   test("a server error on the log call surfaces and exits 1", async () => {
     const { fetchFn } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },

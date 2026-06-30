@@ -354,11 +354,11 @@ export class WatchManager {
       const dir = resolveLoopDir(spec);
       const existing = this.watchers.get(id);
       if (existing) {
-        if (dir && existing.watchDir === dir) continue; // unchanged → leave alone
-        void existing.close(); // dir moved (or no longer resolvable) → drop the stale watcher
+        if (existing.watchDir === dir) continue; // unchanged → leave alone
+        void existing.close(); // dir moved → drop the stale watcher
         this.watchers.delete(id);
       }
-      if (!dir || !fs.existsSync(dir)) continue;
+      if (!fs.existsSync(dir)) continue;
       const w = new LoopWatcher(id, dir, this.server, this.token);
       w.start();
       this.watchers.set(id, w);

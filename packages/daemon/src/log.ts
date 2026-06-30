@@ -65,7 +65,11 @@ function seams(d: LogDeps): Seams {
   };
 }
 
-/** `--k v` pairs, bare `--flag` → true; everything else is positional. */
+/** Boolean flags that never take a value — so `log --json <loop>` keeps `<loop>`
+ *  as a positional instead of swallowing it as `--json`'s argument. */
+const BOOL_FLAGS = new Set(["json"]);
+
+/** `--k v` pairs, bare/boolean `--flag` → true; everything else is positional. */
 function parseArgs(args: string[]): { positional: string[]; flags: Record<string, string | boolean> } {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
@@ -74,7 +78,7 @@ function parseArgs(args: string[]): { positional: string[]; flags: Record<string
     if (a.startsWith("--")) {
       const key = a.slice(2);
       const next = args[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
+      if (!BOOL_FLAGS.has(key) && next !== undefined && !next.startsWith("--")) {
         flags[key] = next;
         i++;
       } else {
