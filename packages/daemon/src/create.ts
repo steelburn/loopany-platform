@@ -95,13 +95,17 @@ export function resolveAgent(env: NodeJS.ProcessEnv, declared: unknown): CodingA
  * (runner.resolveWorkdir / watcher.resolveWatchDir): an explicit `workdir`
  * (tilde-expanded, made absolute) when set, else the per-loop daemon scratch dir
  * `~/.loopany/work/<loopId>`. Never `process.cwd()` — `loopany new` may be invoked
- * from anywhere, and we want the loop's real workdir.
+ * from anywhere, and we want the loop's real workdir. Returns "" when there's no
+ * explicit workdir AND no loopId, so the scratch path can't collapse to the shared
+ * `~/.loopany/work` parent (the caller then skips the install). The dir is NOT
+ * created here — announceSkillInstall ensures it exists before installing.
  */
 export function resolveLoopWorkdir(workdir: unknown, loopId: string): string {
   if (typeof workdir === "string" && workdir.trim()) {
     const expanded = workdir.startsWith("~/") ? path.join(os.homedir(), workdir.slice(2)) : workdir;
     return path.resolve(expanded);
   }
+  if (!loopId.trim()) return "";
   return path.join(LOOPANY_DIR, "work", loopId);
 }
 
@@ -187,14 +191,20 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   }
 }
 
-/** Best-effort, announced project-level install into `workdir`. Swallows every
- *  error and prints one line — loop creation must never fail on the skill. */
+/** Best-effort, announced project-level install into `workdir`. Ensures the dir
+ *  exists first (the scratch dir is created lazily by the runner only at first run,
+ *  and an explicit workdir may not exist yet — npx ENOENTs on a missing cwd, which
+ *  would silently no-op the install). Swallows every error and prints one line —
+ *  loop creation must never fail on the skill. An empty workdir (no explicit dir +
+ *  no loopId) skips the install rather than targeting the shared scratch parent. */
 async function announceSkillInstall(
   installer: (opts: InstallOpts) => Promise<InstallOutcome>,
   workdir: string,
   write: (s: string) => void,
 ): Promise<void> {
+  if (!workdir.trim()) return;
   try {
+    fs.mkdirSync(workdir, { recursive: true });
     const r = await installer({ cwd: workdir });
     write(r.line + "\n");
   } catch {

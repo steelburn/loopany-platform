@@ -30,6 +30,13 @@ function tmpConfig(cfg: object): string {
   return f;
 }
 
+/** An absolute path under a fresh temp dir that does NOT yet exist — so a test can
+ *  prove the installer's cwd is created before the install spawns (the ENOENT fix). */
+function tmpWorkdir(): string {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-workdir-"));
+  return path.join(base, "loop", "run");
+}
+
 describe("detectAgentFromEnv", () => {
   test("fingerprints Claude Code from CLAUDECODE (verified live)", () => {
     expect(detectAgentFromEnv({ CLAUDECODE: "1" })).toBe("claude-code");
@@ -97,6 +104,12 @@ describe("resolveLoopWorkdir (where the skill installs at create)", () => {
     expect(resolveLoopWorkdir("   ", "loop-xyz")).toBe(expected);
     expect(resolveLoopWorkdir(undefined, "loop-xyz")).not.toBe(process.cwd());
   });
+
+  test("no workdir AND no loopId → \"\" (never collapses to the shared scratch parent)", () => {
+    expect(resolveLoopWorkdir(undefined, "")).toBe("");
+    expect(resolveLoopWorkdir("   ", "  ")).toBe("");
+    expect(resolveLoopWorkdir(undefined, "")).not.toBe(path.join(LOOPANY_DIR, "work"));
+  });
 });
 
 describe("runCreate — skill install fires only after a confirmed create, never blocks it", () => {
@@ -109,8 +122,9 @@ describe("runCreate — skill install fires only after a confirmed create, never
     else process.env.LOOPANY_TOKEN = prevToken;
   });
 
-  test("a successful create installs the skill into the loop's resolved workdir (project-level)", async () => {
-    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir: "/srv/loops/cookie" });
+  test("a successful create creates the (not-yet-existing) workdir and installs there (project-level)", async () => {
+    const workdir = tmpWorkdir(); // nested + absent → proves the dir is created before install
+    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir });
     const installed: InstallOpts[] = [];
     const installer = async (opts: InstallOpts): Promise<InstallOutcome> => {
       installed.push(opts);
@@ -122,12 +136,31 @@ describe("runCreate — skill install fires only after a confirmed create, never
       stdout: () => {},
     });
     expect(code).toBe(0);
-    // Targets the loop workdir (NOT global, NOT cwd) so it lands in <workdir>/.claude/skills.
-    expect(installed).toEqual([{ cwd: path.resolve("/srv/loops/cookie") }]);
+    // The missing workdir was created (no ENOENT on npx's cwd) ...
+    expect(fs.existsSync(workdir)).toBe(true);
+    // ... and the install targets it (NOT global, NOT cwd) so it lands in <workdir>/.claude/skills.
+    expect(installed).toEqual([{ cwd: path.resolve(workdir) }]);
+  });
+
+  test("a successful create with no workdir + no returned id does NOT install (no shared-parent fallback)", async () => {
+    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report" }); // no workdir
+    let called = false;
+    const installer = async (): Promise<InstallOutcome> => {
+      called = true;
+      return { ok: true, line: "" };
+    };
+    const code = await runCreate(["--config", cfg, "--server-url", "http://test"], {
+      fetchImpl: async () => okResponse({ ok: true, name: "Cookie" }), // no id
+      installer,
+      stdout: () => {},
+    });
+    expect(code).toBe(0);
+    expect(called).toBe(false); // resolveLoopWorkdir → "" → install skipped
   });
 
   test("a failed create does NOT install the skill", async () => {
-    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir: "/srv/loops/cookie" });
+    const workdir = tmpWorkdir();
+    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir });
     let called = false;
     const installer = async (): Promise<InstallOutcome> => {
       called = true;
@@ -140,10 +173,12 @@ describe("runCreate — skill install fires only after a confirmed create, never
     });
     expect(code).toBe(1);
     expect(called).toBe(false);
+    expect(fs.existsSync(workdir)).toBe(false); // a failed create touches nothing
   });
 
   test("an install failure does NOT fail the create (best-effort, swallowed)", async () => {
-    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir: "/srv/loops/cookie" });
+    const workdir = tmpWorkdir();
+    const cfg = tmpConfig({ cron: "0 8 * * *", task: "report", workdir });
     const installer = async (): Promise<InstallOutcome> => {
       throw new Error("npx ENOENT");
     };
