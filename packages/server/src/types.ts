@@ -19,6 +19,8 @@ export type RunStatus =
 export interface RunSummary {
   /** Run row id — lets the detail view fetch this run's trace directly. */
   id: string
+  /** The loop this run belongs to — lets the run-detail view resolve its files. */
+  loopId: string
   ts: string
   /** In-flight (phase pending/running) — the timeline renders this block pulsing. */
   running?: boolean
@@ -180,9 +182,13 @@ export interface RunDiffFile {
   status: 'added' | 'modified' | 'removed'
   /** Binary/oversize on either side → no inline diff, just the size delta. */
   binary: boolean
+  /** A real text file that exceeds the inline-diff size cap (but is under the
+   *  oversize cap) → no inline diff, but it's NOT binary — the UI says "too large
+   *  to diff" rather than mislabeling it. */
+  tooLarge?: boolean
   /** newSize − oldSize (added ⇒ +newSize, removed ⇒ −oldSize); null when unknown. */
   sizeDelta: number | null
-  /** Unified text diff (text files only); absent for binary/oversize. */
+  /** Unified text diff (text files only); absent for binary/oversize/too-large. */
   diff?: string
 }
 

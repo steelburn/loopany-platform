@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import type { RunDiffFile, RunDiffResult, RunSummary, TranscriptResult } from '../types'
+import type { ArtifactSummary, RunDiffFile, RunDiffResult, RunSummary, TranscriptResult } from '../types'
 import { dur, fmt, formatTranscript } from '../lib/format'
-import { cancelRun, getRunDiff, getTranscript } from '../server/loopApi'
+import { cancelRun, getArtifacts, getRunDiff, getTranscript } from '../server/loopApi'
+import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
 import { ModalHead, ModalSection } from './Modal'
 import { btn, btnDanger, Pre, StatusPill } from './ui'
 
@@ -37,6 +38,45 @@ function fmtDelta(n: number | null): string {
   const abs = Math.abs(n)
   const mag = abs < 1024 ? `${abs} B` : abs < 1024 * 1024 ? `${(abs / 1024).toFixed(1)} KB` : `${(abs / (1024 * 1024)).toFixed(1)} MB`
   return `${sign}${mag}`
+}
+
+/** Historical fallback for a run with no snapshot (predates Phase 3): the run's
+ *  recorded produced-file list, reusing the Phase 2 file viewer. Files still
+ *  synced to the loop expand/download inline; ones with no synced blob render
+ *  non-clickable with a subtle hint instead of a dead link. */
+function RecordedFiles({ run }: { run: RunSummary }) {
+  const artifacts = run.artifacts ?? []
+  const [live, setLive] = useState<ArtifactSummary[] | null>(null)
+  useEffect(() => {
+    let alive = true
+    getArtifacts({ data: { loopId: run.loopId } })
+      .then((d) => alive && setLive(d))
+      .catch(() => alive && setLive([]))
+    return () => {
+      alive = false
+    }
+  }, [run.loopId])
+
+  const byPath = new Map((live ?? []).map((f) => [f.path, f]))
+  return (
+    <>
+      <ModalSection>Files ({artifacts.length})</ModalSection>
+      {live == null ? (
+        <div className="font-mono text-[12px] tracking-[0.08em] text-secondary">[ Loading ]</div>
+      ) : (
+        <ul className="space-y-1">
+          {artifacts.map((a) => {
+            const f = byPath.get(a.path)
+            return f ? (
+              <ArtifactFileRow key={a.path} loopId={run.loopId} file={f} />
+            ) : (
+              <UnavailableFileRow key={a.path} path={a.path} />
+            )
+          })}
+        </ul>
+      )}
+    </>
+  )
 }
 
 const STATUS_LABEL: Record<RunDiffFile['status'], string> = { added: 'added', modified: 'changed', removed: 'removed' }
@@ -76,7 +116,10 @@ function Changes({ run }: { run: RunSummary }) {
         <div className="font-mono text-[12px] tracking-[0.08em] text-secondary">[ Loading ]</div>
       </>
     )
-  if (!data.hasSnapshot)
+  if (!data.hasSnapshot) {
+    // Runs predating Phase 3 have no diff snapshot — fall back to the run's
+    // recorded produced-file list so the file surface isn't lost.
+    if ((run.artifacts?.length ?? 0) > 0) return <RecordedFiles run={run} />
     return (
       <>
         <ModalSection>Changes</ModalSection>
@@ -85,6 +128,7 @@ function Changes({ run }: { run: RunSummary }) {
         </div>
       </>
     )
+  }
   return (
     <>
       <ModalSection>Changes ({data.files.length})</ModalSection>
@@ -99,6 +143,7 @@ function Changes({ run }: { run: RunSummary }) {
                 <span className="break-all text-primary">{f.path}</span>
                 {fmtDelta(f.sizeDelta) && <span className="shrink-0 text-[10px] tracking-[0.06em] text-disabled">{fmtDelta(f.sizeDelta)}</span>}
                 {f.binary && <span className="shrink-0 text-[10px] tracking-[0.06em] text-secondary">binary</span>}
+                {f.tooLarge && <span className="shrink-0 text-[10px] tracking-[0.06em] text-secondary">too large to diff</span>}
               </span>
             )
             // Text files expand their unified diff; binary/oversize show the line only.

@@ -62,21 +62,23 @@ export async function computeRunDiff(runId: string): Promise<RunDiffResult> {
 
     if (c && !p) {
       // Added.
-      const diffable = isText(c) && withinDiffCap(c);
-      const file: RunDiffFile = { path, status: "added", binary: !diffable, sizeDelta: c.size ?? null };
-      if (diffable) {
-        const text = await textOf(c);
-        if (text != null) file.diff = unified(path, "", text);
+      const text = isText(c);
+      const tooLarge = text && !withinDiffCap(c);
+      const file: RunDiffFile = { path, status: "added", binary: !text, tooLarge, sizeDelta: c.size ?? null };
+      if (text && !tooLarge) {
+        const body = await textOf(c);
+        if (body != null) file.diff = unified(path, "", body);
         else file.binary = true; // bytes gone → can't show a diff
       }
       files.push(file);
     } else if (!c && p) {
       // Removed.
-      const diffable = isText(p) && withinDiffCap(p);
-      const file: RunDiffFile = { path, status: "removed", binary: !diffable, sizeDelta: p.size != null ? -p.size : null };
-      if (diffable) {
-        const text = await textOf(p);
-        if (text != null) file.diff = unified(path, text, "");
+      const text = isText(p);
+      const tooLarge = text && !withinDiffCap(p);
+      const file: RunDiffFile = { path, status: "removed", binary: !text, tooLarge, sizeDelta: p.size != null ? -p.size : null };
+      if (text && !tooLarge) {
+        const body = await textOf(p);
+        if (body != null) file.diff = unified(path, body, "");
         else file.binary = true;
       }
       files.push(file);
@@ -84,9 +86,10 @@ export async function computeRunDiff(runId: string): Promise<RunDiffResult> {
       // Present in both — unchanged content ⇒ skip.
       if (c.hash === p.hash && c.oversize === p.oversize && c.size === p.size) continue;
       const sizeDelta = c.size != null && p.size != null ? c.size - p.size : null;
-      const diffable = isText(c) && isText(p) && withinDiffCap(c) && withinDiffCap(p);
-      const file: RunDiffFile = { path, status: "modified", binary: !diffable, sizeDelta };
-      if (diffable) {
+      const bothText = isText(c) && isText(p);
+      const tooLarge = bothText && !(withinDiffCap(c) && withinDiffCap(p));
+      const file: RunDiffFile = { path, status: "modified", binary: !bothText, tooLarge, sizeDelta };
+      if (bothText && !tooLarge) {
         const [oldText, newText] = await Promise.all([textOf(p), textOf(c)]);
         if (oldText != null && newText != null) file.diff = unified(path, oldText, newText);
         else file.binary = true;

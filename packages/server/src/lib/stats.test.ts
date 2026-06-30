@@ -4,6 +4,7 @@ import type { RunSummary } from '../types'
 
 const run = (ts: string, state: RunSummary['state']): RunSummary => ({
   id: `run-${ts}`,
+  loopId: 'loop-1',
   ts,
   outcome: 'exec',
   status: 'nothing-new',

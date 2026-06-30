@@ -28,6 +28,7 @@ function nextRun(loop: Loop): string | null {
 export function toRunSummary(r: Run): RunSummary {
   return {
     id: r.id,
+    loopId: r.loopId,
     ts: r.ts,
     running: r.phase === "pending" || r.phase === "running",
     canceled: r.phase === "canceled",

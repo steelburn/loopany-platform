@@ -138,6 +138,21 @@ test("getRunDiff: binary/oversize change emits a size-delta marker, no inline di
   expect(f.sizeDelta).toBe(2);
 });
 
+test("getRunDiff: a large text file (over the diff cap, under oversize) is tooLarge, not binary", async () => {
+  const { token, machineId, loop } = seed();
+  const big = Buffer.from("x".repeat(600 * 1024)); // > 512KB diff cap, plain text
+  const bigger = Buffer.from("y".repeat(601 * 1024));
+  await doRun(token, machineId, loop.id, "2026-06-01T00:00:00.000Z", [{ path: "huge.txt", bytes: big }]);
+  const run2 = await doRun(token, machineId, loop.id, "2026-06-02T00:00:00.000Z", [{ path: "huge.txt", bytes: bigger }]);
+
+  const diff = await runDiff.computeRunDiff(run2.id);
+  const f = diff.files.find((x) => x.path === "huge.txt")!;
+  expect(f.status).toBe("modified");
+  expect(f.tooLarge).toBe(true);
+  expect(f.binary).toBe(false);
+  expect(f.diff).toBeUndefined();
+});
+
 test("getRunDiff: first run (no previous snapshot) shows everything as added", async () => {
   const { token, machineId, loop } = seed();
   const run = await doRun(token, machineId, loop.id, "2026-06-01T00:00:00.000Z", [{ path: "first.md", bytes: Buffer.from("hi") }]);
