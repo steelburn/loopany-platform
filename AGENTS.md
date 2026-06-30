@@ -61,7 +61,20 @@ LLM and executes no user code**.
   `SKILL.md` is the **overview** (frontmatter `name: loopany` + a strong `description`
   so Claude auto-triggers it) that routes to the three references: `create.md` (up →
   task file → config → `new`), `update.md` (`loopany edit` envelope vs. task file), and
-  `evolve.md` (task-file-as-running-memory model). **`/api/skill` serves the overview**
+  `evolve.md` (task file as running memory + the evolution pass that refits a loop's
+  dashboard/gate to real data). **`evolve.md` is ALSO the single source for the evolve
+  RUN prompt** — `gateway/prompt.ts` `import evolve from "../skill/references/evolve.md?raw"`
+  (`buildEvolvePrompt()`), so the skill and run-dispatch read the SAME file and the
+  evolution guidance can't drift (the unify that retired the old near-duplicate
+  `scheduler/prompts/evolve.md`). The `?raw` import bundles the text into the nitro
+  `.output` identically from `skill/references/` as it did from `scheduler/prompts/`
+  (no runtime `fs`/ENOENT). The OTHER run prompts stay under `scheduler/prompts/`:
+  `control-on`/`control-off`/`exec-loop` are run-only (no authoring twin), and `edit`
+  is **kept separate from `update.md` on purpose** — the edit RUN uses run-token verbs
+  on the current loop (`loopany set-cron`/`set-tz`/`set-ui`…, no id, via `/agent-api/loop`)
+  while `update.md` is the AUTHORING CLI (`loopany edit <id> --cron`, local daemon); the
+  two command surfaces serve different actors and can't merge into one doc without making
+  one audience wrong or breaking the run. **`/api/skill` serves the overview**
   (`routes/api.skill.ts`, Vite `?raw`) — the bootstrap an agent follows on first capture;
   **`/api/skill/references/<file>`** (`routes/api.skill.references.$.ts`, static map,
   path-safe — only the 3 exact names resolve) serves the references over HTTP as a
@@ -351,4 +364,4 @@ LLM and executes no user code**.
 
 The **Cookie Daily Breakfast Report** loop runs end-to-end: scheduler → daemon poll → claude →
 `loopany report` → run `done` (real breakfast report). Dashboard renders real data
-(browser-verified, Geist style). 64 server tests + 28 daemon tests green; both packages typecheck.
+(browser-verified, Geist style). 91 server tests + 28 daemon tests green; both packages typecheck.
