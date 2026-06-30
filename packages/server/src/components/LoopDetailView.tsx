@@ -1,42 +1,45 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Menu } from '@base-ui/react/menu'
-import type { ChannelSummary, JobDetail, RunSummary, TranscriptStep } from '../types'
-import { dotColor, dotLabel, dur, fmt, formatTranscript, tsShort } from '../lib/format'
-import { deleteJob, evolveJob, getJobDetail, getTranscript, patchJob, requestEdit, runJob } from '../server/loopApi'
+import { Link, useNavigate } from '@tanstack/react-router'
+import type { ChannelSummary, CodingAgent, JobDetail, RunSummary, TranscriptStep } from '../types'
+import { cronText, dotColor, dotLabel, dur, fmt, formatTranscript, tsShort, until } from '../lib/format'
+import { deleteJob, evolveJob, getJobDetail, getTranscript, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { ModalHead, ModalSection } from './Modal'
 import { LoopView } from './LoopView'
-import { TaskFileView } from './TaskFileView'
-import { FilesView } from './FilesView'
+import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
-import { ArtifactList, btn, btnCost, btnKey, btnKeyPrimary, btnPrimary, ErrorBanner, Pre } from './ui'
+import { MachinesModal } from './MachinesModal'
+import { Timeline, WINDOW } from './Timeline'
+import { ArtifactList, btn, btnCost, btnKey, btnKeyPrimary, btnPrimary, ErrorBanner, Pre, runPulseStyle } from './ui'
 import { ConfirmBar, FlashLine, useDeferredDelete, useFlash } from './actionUi'
 
+const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+
+/** Merge two chronological run lists, dedup by id (first wins), re-sort ascending. */
+function mergeRuns(primary: RunSummary[], secondary: RunSummary[]): RunSummary[] {
+  const seen = new Set<string>()
+  const out: RunSummary[] = []
+  for (const r of [...primary, ...secondary]) {
+    if (seen.has(r.id)) continue
+    seen.add(r.id)
+    out.push(r)
+  }
+  out.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
+  return out
+}
+
 /**
- * Loop detail, modes in one shell:
- *   - read    : the generative-UI panel (or a fallback chart) + actions
- *               (edit / run-now / evolve / pause / delete) + task file + run history.
- *   - editVia : the PRIMARY edit path — hand the change to Claude Code on the loop's
- *               machine (Agent-First). A copy-forward snippet, no claim/poll; the
- *               agent applies it with its persisted device token.
- *   - editing : the demoted fallback — a focused full-width field form (Save → PATCH),
- *               reachable only via "Edit fields manually" inside editVia. Writes apply
- *               via the live Scheduler. Both edit modes mirror RunView's drill-in.
+ * Loop detail PAGE body (`/loops/$loopId`) — the redesign of the former modal.
+ * One scrolling page: a loop header (name / status / schedule / agent / machine +
+ * the action toolbar), an optional agent-authored dashboard, then a two-column
+ * main with the UNIFIED Files panel (the task file alongside synced artifacts) and
+ * the Runs timeline (a strip + a clickable list, each run linking to its own
+ * detail route). Self-polls while open (fast while a run is live). The edit paths
+ * (hand-to-Claude-Code; manual field form) remain in-page mode takeovers.
  */
-export function JobDetailView({
-  id,
-  onChanged,
-  onClose,
-  onReconnect,
-  onPickRun,
-}: {
-  id: string
-  onChanged: () => void
-  onClose: () => void
-  /** Open the Machines panel to reconnect the loop's (offline) machine. */
-  onReconnect?: () => void
-  onPickRun: (jobName: string, run: RunSummary) => void
-}) {
+export function LoopDetailView({ id }: { id: string }) {
+  const navigate = useNavigate()
   const [detail, setDetail] = useState<JobDetail | null>(null)
   const [channels, setChannels] = useState<ChannelSummary[]>([]) // team push channels for the inline picker
   const [err, setErr] = useState<string | null>(null) // fatal load error — replaces the whole view
@@ -44,26 +47,25 @@ export function JobDetailView({
   const [editing, setEditing] = useState(false) // manual field form (LoopForm) — the demoted fallback
   const [editVia, setEditVia] = useState(false) // primary: hand the edit to Claude Code on the machine
   const [editInstruction, setEditInstruction] = useState('')
-  const [editDispatched, setEditDispatched] = useState(false) // dispatched → watch the edit run stream in (don't jump to detail)
+  const [editDispatched, setEditDispatched] = useState(false) // dispatched → watch the edit run stream in
   const [editLog, setEditLog] = useState<{ step: number; label: string }[]>([]) // accumulated live progress
   const [editTrace, setEditTrace] = useState<TranscriptStep[] | null>(null) // full transcript, pulled once settled
-  // Run ids present at dispatch — lets us pick out the NEW edit run that lands after.
   const seenRunIds = useRef<Set<string>>(new Set())
-  const traceFetched = useRef(false) // one-shot guard so the transcript is fetched once on settle
-  // The dispatched edit run = a fresh `edit` run not present when we dispatched.
+  const traceFetched = useRef(false)
   const findEditRun = (rs: RunSummary[]) => rs.find((r) => r.role === 'edit' && !seenRunIds.current.has(r.id))
-  const [pushOpen, setPushOpen] = useState(false) // "Push" tapped → row becomes the notify/channel pickers
-  const [pushSaved, setPushSaved] = useState(false) // transient ✓ inside the push row (not the full-width flash)
-  // Which async action is in flight — disables the row so a money-spend can't
-  // double-fire, and swaps the active button's label to a present-tense gerund.
+  const [pushOpen, setPushOpen] = useState(false)
+  const [pushSaved, setPushSaved] = useState(false)
+  const [machinesOpen, setMachinesOpen] = useState(false)
   const [pending, setPending] = useState<null | 'run' | 'evolve' | 'save' | 'toggle' | 'edit'>(null)
-  // The high-stakes guard rendered in-panel (Nothing-style, <ConfirmBar/>) instead
-  // of a native confirm() — keeps the printed-manual calm, one branded language.
   const [confirming, setConfirming] = useState<null | 'run' | 'evolve' | 'delete'>(null)
-  const [flash, setFlash] = useFlash() // transient ✓/✕ peak-end signal (self-clearing)
+  const [flash, setFlash] = useFlash()
   const formRef = useRef<LoopFormHandle>(null)
-  // Delete has no server restore — defer the real commit behind a 6s Undo window.
-  const del = useDeferredDelete(id, (loopId) => deleteJob({ data: loopId }).then(onChanged), { onExpire: onClose })
+  const del = useDeferredDelete(id, (loopId) => deleteJob({ data: loopId }).then(() => navigate({ to: '/' })), {
+    onExpire: () => navigate({ to: '/' }),
+  })
+
+  // Older run pages (lazy) for the timeline strip, mirroring LoopCard.
+  const [older, setOlder] = useState<RunSummary[]>([])
 
   const load = useCallback(async () => {
     setErr(null)
@@ -74,8 +76,7 @@ export function JobDetailView({
     }
   }, [id])
 
-  // Silent background refresh — unlike `load`, a transient failure keeps the
-  // stale data on screen rather than blowing the modal away into the error view.
+  // Silent background refresh — a transient failure keeps the stale data on screen.
   const poll = useCallback(async () => {
     try {
       setDetail(await getJobDetail({ data: id }))
@@ -94,16 +95,15 @@ export function JobDetailView({
     setEditTrace(null)
     traceFetched.current = false
     setPushOpen(false)
+    setOlder([])
     void load()
     void listChannels()
       .then(setChannels)
       .catch(() => {})
   }, [id, load])
 
-  // The dashboard's poller pauses while a modal is open, and this view fetches
-  // its OWN detail — so without this it'd freeze: an in-flight run would never
-  // settle, the task file would never sync in. Poll while open (fast while a run
-  // is live), but not mid-edit (don't churn the form) or mid-delete (tombstone).
+  // Self-poll the page (fast while a run is live), but not mid-edit (don't churn
+  // the form) or mid-delete (the optimistic tombstone).
   const running = !!detail?.summary.running
   useEffect(() => {
     if (editing || del.armed) return
@@ -111,16 +111,14 @@ export function JobDetailView({
     return () => clearInterval(t)
   }, [editing, del.armed, running, poll])
 
-  // The inline push ✓ self-clears after a beat (and on unmount) — no stray timer.
   useEffect(() => {
     if (!pushSaved) return
     const t = setTimeout(() => setPushSaved(false), 1800)
     return () => clearTimeout(t)
   }, [pushSaved])
 
-  // While an edit is dispatched: accumulate its live progress lines (the slim
-  // sampled signal), then pull the full transcript once it settles (the complete
-  // record — progress is cleared server-side when the run finalizes).
+  // While an edit is dispatched: accumulate live progress, then pull the full
+  // transcript once it settles (progress is cleared server-side at finalize).
   useEffect(() => {
     if (!editDispatched) return
     const er = findEditRun(detail?.runs ?? [])
@@ -132,8 +130,6 @@ export function JobDetailView({
           prev.at(-1)?.step === p.step && prev.at(-1)?.label === p.label ? prev : [...prev, { step: p.step, label: p.label }],
         )
     } else if (!traceFetched.current) {
-      // Settled — pull the full transcript exactly once (guard survives the polls
-      // that fire before the fetch resolves); allow a retry if it errors.
       traceFetched.current = true
       void getTranscript({ data: { runId: er.id } })
         .then((res) => !('error' in res) && setEditTrace(res.steps))
@@ -143,12 +139,8 @@ export function JobDetailView({
 
   async function refreshAll() {
     await load()
-    onChanged()
   }
 
-  // Run-now: only an exec-bound loop spawns the coding agent (claude) and costs
-  // credits, so only that path needs the in-panel guard; workflow/plain loops are
-  // cheap & deterministic and fire straight away.
   function onRun() {
     if (detail?.job.exec) setConfirming('run')
     else void doRun()
@@ -160,9 +152,6 @@ export function JobDetailView({
       const r = await runJob({ data: id })
       if (r?.error) return setActionErr(`Run failed: ${r.error}`)
       setConfirming(null)
-      // The live running indicator surfaces the in-flight run on its own; this
-      // flash just acknowledges the click landed (and the credits were spent) —
-      // held longer than a routine flash since money left the account.
       setFlash({ label: 'Queued', hold: 4000 })
       await refreshAll()
     } finally {
@@ -187,25 +176,18 @@ export function JobDetailView({
     try {
       await patchJob({ data: { id, patch: { enabled } } })
       await refreshAll()
-      // Pausing silently halts all scheduled work — give the cheap, no-confirm
-      // toggle an Undo instead of a guard dialog.
       setFlash({ label: enabled ? 'Enabled' : 'Paused', undo: () => void onToggle(!enabled) })
     } finally {
       setPending(null)
     }
   }
-  // Inline push config (notify policy + channel) — edited straight from read mode,
-  // no need to open the full field form.
   async function setPush(patch: { notify?: string; channelId?: string }) {
     setActionErr(null)
     const r = await patchJob({ data: { id, patch } })
     if (r.error) return setActionErr(`Save failed: ${r.error}`)
     await refreshAll()
-    // Acknowledge inline (a green ✓ in the push row), not as a full-width flash
-    // line — the effect below self-clears it (and cleans up on unmount).
     setPushSaved(true)
   }
-
   async function onSave() {
     const payload = formRef.current?.read()
     if (!payload) return
@@ -227,12 +209,9 @@ export function JobDetailView({
     setActionErr(null)
     setPending('edit')
     try {
-      // Snapshot current run ids BEFORE dispatch so we can spot the new edit run.
       seenRunIds.current = new Set((detail?.runs ?? []).map((r) => r.id))
       const r = await requestEdit({ data: { id, instruction } })
       if (r.error) return setActionErr(`Couldn't queue the edit: ${r.error}`)
-      // Stay on the Edit screen and watch the dispatched run stream in below —
-      // the open-modal poll surfaces its progress, then its result.
       setEditLog([])
       setEditTrace(null)
       setEditDispatched(true)
@@ -247,32 +226,39 @@ export function JobDetailView({
     else if (confirming === 'evolve') void doEvolve()
     else if (confirming === 'delete') {
       setConfirming(null)
-      del.arm() // optimistic tombstone now; real delete after the Undo window
+      del.arm()
     }
   }
 
-  if (err) return <div className="font-mono text-[13px] text-accent">[ ERROR ] {err}</div>
+  const backLink = (
+    <Link
+      to="/"
+      className="inline-flex items-center gap-1.5 font-mono text-[11px] tracking-[0.08em] text-secondary transition-colors hover:text-display"
+    >
+      <span aria-hidden>←</span> Loops
+    </Link>
+  )
+
+  if (err)
+    return (
+      <Shell back={backLink}>
+        <div className="font-mono text-[13px] text-accent">[ ERROR ] {err}</div>
+      </Shell>
+    )
   if (!detail)
-    return <div className="font-mono text-[12px] tracking-[0.08em] text-secondary">[ Loading ]</div>
+    return (
+      <Shell back={backLink}>
+        <div className="font-mono text-[12px] tracking-[0.08em] text-secondary">[ Loading ]</div>
+      </Shell>
+    )
 
   const { job, summary: s, runs } = detail
   const hasUi = !!job.ui
-
-  // Read-mode actions. Weight tracks STAKES, not listing order: Run-once leads as
-  // the filled primary (the screen's real verb), Evolve carries the metered `btnCost`
-  // tier (it spends credits too), Edit/Pause are quiet free toggles, and destructive
-  // Delete is pushed to the far edge (ml-auto). A high-stakes click swaps the row for
-  // an in-panel confirm; the active button shows a gerund and the whole row locks
-  // (`busy`) so a money-spend can't double-fire.
   const busy = !!pending
-  // Any loop can evolve (the evolve pass bootstraps schema/ui/workflow from run
-  // data), so the button is always offered — mirrors store.canEvolve().
   const showEvolve = true
-  // Execution actions (run / evolve) dispatch to the machine — gate them when it's
-  // offline. Edit / Pause / Delete are server-side, so they stay live (you may want
-  // to pause or remove a loop precisely because its machine died).
   const online = detail.machine.online
   const offlineHint = !online ? 'Machine offline — reconnect first' : undefined
+  const done = !s.enabled && !!runs.length && runs[0]!.status === 'resolved'
 
   const CONFIRM = {
     run: { q: 'Run one real cycle now?', note: 'Spawns the coding agent (claude).', cta: 'Run once', danger: false },
@@ -285,8 +271,6 @@ export function JobDetailView({
     delete: { q: 'Delete this loop?', note: 'Removes the loop and its schedule. This cannot be undone.', cta: 'Delete', danger: true },
   } as const
 
-  // The success/undo flash gets its OWN line above the row — a distinct peak-end
-  // beat, not a chip squeezed between pills where the eye can skim past it.
   const flashLine = flash && (
     <div className="mb-2.5">
       <FlashLine label={flash.label} tone={flash.tone} onUndo={flash.undo} />
@@ -294,31 +278,21 @@ export function JobDetailView({
   )
 
   const c = confirming && CONFIRM[confirming]
-  // Delete is server-side; run/evolve need the machine, so lock their CTA if it
-  // dropped while the guard was open.
   const confirmLocked = busy || (confirming !== 'delete' && !online)
-  // Inline push pickers (notify policy + channel) — shared select styling.
   const pushSelectCls =
     'lp-select cursor-pointer rounded-md border border-wire bg-surface py-1.5 pl-2.5 font-mono text-[12px] text-primary outline-none transition-colors hover:border-display focus:border-display disabled:cursor-default disabled:opacity-40'
-  // "···" overflow-menu rows — flat, full-bleed highlight; danger tier tints red.
   const menuItem =
     'flex w-full cursor-pointer select-none items-center px-3.5 py-2 text-[13px] text-primary outline-none transition-colors data-[highlighted]:bg-raised data-[disabled]:cursor-default data-[disabled]:opacity-40'
   const menuItemDanger =
     'flex w-full cursor-pointer select-none items-center px-3.5 py-2 text-[13px] text-accent outline-none transition-colors data-[highlighted]:bg-[color:var(--color-accent)]/10 data-[disabled]:cursor-default data-[disabled]:opacity-40'
-  // The bottom action bar's row content — four mutually-exclusive states: a
-  // high-stakes confirm, the delete tombstone, the in-place Push pickers (tap
-  // "Push" → the row becomes the notify/channel selects), or the normal verbs.
+
   const actionBar = c ? (
     <ConfirmBar key={confirming} prompt={c.q} note={c.note} cta={c.cta} danger={c.danger} busy={confirmLocked} onConfirm={onConfirm} onCancel={() => setConfirming(null)} />
   ) : del.armed ? (
-    // Deferred-delete tombstone — gone from the UI; Undo reverses it before the
-    // real delete commits (symmetry with Pause's Undo, for the irreversible action).
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-wire bg-raised px-4 py-3">
       <FlashLine tone="gone" label="Deleted" onUndo={del.cancel} />
     </div>
   ) : pushOpen ? (
-    // Push tapped — the whole row turns into the notify-policy + channel pickers
-    // (changes apply on select, like before); Done collapses back to the verbs.
     <div className="flex flex-wrap items-center gap-2.5">
       <span className="font-mono text-[11px] tracking-[0.08em] text-secondary">Push</span>
       <select className={pushSelectCls} value={job.notify} disabled={busy} onChange={(e) => void setPush({ notify: e.target.value })}>
@@ -329,12 +303,7 @@ export function JobDetailView({
         ))}
       </select>
       <span aria-hidden className="text-secondary">→</span>
-      <select
-        className={pushSelectCls}
-        value={job.channelId ?? ''}
-        disabled={busy}
-        onChange={(e) => void setPush({ channelId: e.target.value })}
-      >
+      <select className={pushSelectCls} value={job.channelId ?? ''} disabled={busy} onChange={(e) => void setPush({ channelId: e.target.value })}>
         <option value="">none (dashboard only)</option>
         {channels.map((ch) => (
           <option key={ch.id} value={ch.id}>
@@ -343,10 +312,7 @@ export function JobDetailView({
         ))}
       </select>
       <div className="ml-auto flex items-center gap-2.5">
-        <span
-          aria-hidden
-          className={`text-[14px] leading-none text-success transition-opacity duration-200 ${pushSaved ? 'opacity-100' : 'opacity-0'}`}
-        >
+        <span aria-hidden className={`text-[14px] leading-none text-success transition-opacity duration-200 ${pushSaved ? 'opacity-100' : 'opacity-0'}`}>
           ✓
         </span>
         <button
@@ -359,9 +325,7 @@ export function JobDetailView({
       </div>
     </div>
   ) : (
-    // Run + Edit stay outside; the rest (incl. metered Evolve) live behind a "···"
-    // menu (Cloudflare pattern) so the toolbar reads as two buttons, not a wall.
-    <div className="flex flex-wrap items-center justify-end gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <button
         className={btnKeyPrimary}
         disabled={busy || !online}
@@ -386,12 +350,7 @@ export function JobDetailView({
           <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-[950]">
             <Menu.Popup className="min-w-[176px] origin-[var(--transform-origin)] rounded-lg border border-wire bg-surface py-1.5 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.4)] outline-none transition-[opacity,transform] duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
               {showEvolve && (
-                <Menu.Item
-                  className={menuItem}
-                  disabled={busy || !online}
-                  onClick={() => setConfirming('evolve')}
-                  title={offlineHint ?? 'Spends credits'}
-                >
+                <Menu.Item className={menuItem} disabled={busy || !online} onClick={() => setConfirming('evolve')} title={offlineHint ?? 'Spends credits'}>
                   {pending === 'evolve' ? 'Evolving…' : 'Evolve now'}
                 </Menu.Item>
               )}
@@ -412,14 +371,8 @@ export function JobDetailView({
     </div>
   )
 
-  // Inline action error — sits above the row, never replaces the view (only a
-  // failed initial load does that). Same `[ ERROR ]` mono language, dismissable.
-  const actionErrEl = actionErr && (
-    <ErrorBanner message={actionErr} onDismiss={() => setActionErr(null)} className="mb-2.5" />
-  )
+  const actionErrEl = actionErr && <ErrorBanner message={actionErr} onDismiss={() => setActionErr(null)} className="mb-2.5" />
 
-  // Offline notice — the loop's machine isn't polling, so run/evolve are gated.
-  // Not an error (the loop is fine); a calm gray-dot state + a Reconnect shortcut.
   const offlineEl = !online && (
     <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-wire bg-raised px-4 py-2.5">
       <span className="inline-flex items-center gap-2 font-mono text-[11px] tracking-[0.08em] text-secondary">
@@ -427,129 +380,28 @@ export function JobDetailView({
         Machine {detail.machine.name ? `“${detail.machine.name}” ` : ''}offline
       </span>
       <span className="text-[12.5px] text-secondary">— run &amp; evolve are paused until it reconnects.</span>
-      {onReconnect && (
-        <button
-          type="button"
-          onClick={onReconnect}
-          className="ml-auto cursor-pointer font-mono text-[11px] tracking-[0.08em] text-interactive underline underline-offset-2 transition-colors hover:text-display"
-        >
-          Reconnect
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={() => setMachinesOpen(true)}
+        className="ml-auto cursor-pointer font-mono text-[11px] tracking-[0.08em] text-interactive underline underline-offset-2 transition-colors hover:text-display"
+      >
+        Reconnect
+      </button>
     </div>
   )
 
-  // Task file (the loop's spec) — paired with the action verbs in the right column.
-  // When `fill`, the doc is absolutely-positioned inside a flex-1 wrapper so it
-  // STRETCHES to the column height (matching the left) and scrolls — without its
-  // (long) content inflating the grid row. So the LEFT column drives the height,
-  // the task just fills the leftover. Plain layout: a normal capped block.
-  const taskBlock = (fill: boolean) =>
-    job.taskFile && (
-      <>
-        <ModalSection>
-          task file<code className="ml-1 font-mono">· {job.taskFile}</code>
-          {detail.taskFileSyncedAt && (
-            <span className="ml-1 font-mono normal-case text-secondary">· synced {fmt(detail.taskFileSyncedAt)}</span>
-          )}
-        </ModalSection>
-        {detail.taskFileContent == null ? (
-          <div className="text-[13px] text-disabled">(syncs from the machine on the next run)</div>
-        ) : fill ? (
-          <div className="lg:relative lg:min-h-0 lg:flex-1">
-            <TaskFileView content={detail.taskFileContent} fill />
-          </div>
-        ) : (
-          <TaskFileView content={detail.taskFileContent} />
-        )}
-      </>
-    )
-
-  // Run history — paired under the dashboard in the left "output" column. Capped +
-  // internal scroll; this (with the dashboard) is the column that DRIVES the modal
-  // height. The right column's task then fills to match it (see below).
-  const runsBlock = (
-    <>
-      <ModalSection>runs ({runs.length})</ModalSection>
-      {runs.length ? (
-        <div className="max-h-[clamp(260px,38vh,440px)] overflow-y-auto">
-          <table className="w-full text-[13px]">
-            <thead>
-              <tr className="sticky top-0 z-10 border-b border-wire bg-surface font-mono text-[10.5px] tracking-[0.06em] text-secondary">
-                {/* Outcome is now just a colored swatch on each row — no text column. */}
-                <th className="py-2 pr-2.5 font-normal" aria-label="Outcome" />
-                <th className="py-2 pr-3 text-left font-normal">Time</th>
-                <th className="w-full py-2 pr-3 text-left font-normal">Message</th>
-                <th className="py-2 text-left font-normal">Duration</th>
-              </tr>
-            </thead>
-            <tbody>
-            {runs.map((x: RunSummary, i: number) => (
-              <tr
-                key={i}
-                className="cursor-pointer border-b border-hairline align-top hover:bg-raised"
-                onClick={() => onPickRun(s.name, x)}
-              >
-                {/* Outcome swatch — color IS the meaning (green=resolved, red=error,
-                    blue=evolved, ink/gray=neutral); the label rides the tooltip. */}
-                <td className="py-2.5 pr-2.5">
-                  <span
-                    className="mt-0.5 inline-block size-2.5 shrink-0 rounded-[2px]"
-                    style={{ background: dotColor(x) }}
-                    title={dotLabel(x)}
-                    aria-label={dotLabel(x)}
-                  />
-                </td>
-                <td className="whitespace-nowrap py-2 pr-3 font-mono text-[12px] text-secondary">{tsShort(x.ts)}</td>
-                <td className="py-2 pr-3">
-                  {x.running && x.progress ? (
-                    <span className="inline-flex items-center gap-2 font-mono text-[12px] text-secondary">
-                      <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-[color:var(--color-display)]" />
-                      <span className="text-disabled">{x.progress.step}</span>
-                      <span className="truncate">{x.progress.label}</span>
-                    </span>
-                  ) : x.error ? (
-                    // Errored run — the red swatch already flags it; show the reason here.
-                    <span className="text-secondary">{x.error}</span>
-                  ) : (
-                    // One run = one scannable line. Clamp the message to 2 lines; the
-                    // full text lives on the run drill-in (row is clickable).
-                    <span className="line-clamp-2">{x.message || ''}</span>
-                  )}
-                </td>
-                <td className="whitespace-nowrap py-2 font-mono text-[12px] text-secondary">{dur(x.durationMs)}</td>
-              </tr>
-            ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="text-[13px] text-disabled">never run</div>
-      )}
-    </>
-  )
-
-  // The loop's live-synced artifacts (Phase 2) — its own lazy-by-loopId section
-  // (the detail payload stays small; FilesView fetches + self-polls). Sits under
-  // the run history, the loop's "what it produced" surface beside "what it ran".
-  const filesBlock = <FilesView loopId={id} running={running} />
-
-  // ---- edit-via-Claude-Code mode: the primary path (Agent-First). Describe the
-  // change; the server dispatches a one-off `edit` run to the loop's machine, where
-  // claude applies it (schedule + task.md). No claim/paste — the dashboard's poll
-  // reflects it, and the edit run shows in history (watch it live via progress). ----
+  // ---- edit-via-Claude-Code mode (primary edit path) ----
   if (editVia) {
     const onMachine = detail.machine.name ? `“${detail.machine.name}”` : 'the machine this loop runs on'
     const exitEdit = () => {
       setEditVia(false)
       setEditDispatched(false)
     }
-    // The run that landed from this dispatch (a fresh `edit` run not seen before).
     const editRun = editDispatched ? findEditRun(runs) : undefined
     const editSettled = editRun && !editRun.running
     const traceText = editTrace?.length ? formatTranscript(editTrace) : ''
     return (
-      <>
+      <Shell back={backLink}>
         <ModalHead title={`Edit · ${s.name}`} />
         <button
           type="button"
@@ -560,13 +412,10 @@ export function JobDetailView({
         </button>
 
         {editDispatched ? (
-          // ---- watching: the dispatched edit run streams in here (no jump to detail) ----
           <div className="mt-4">
             <div className="text-[13px] leading-snug text-secondary">
               Dispatched to Claude Code on {onMachine}. Watching it apply the change:
             </div>
-
-            {/* Status header — queued → applying → settled outcome. */}
             <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1">
               {!editRun ? (
                 <span className="inline-flex items-center gap-2.5 font-mono text-[12px] text-secondary">
@@ -588,9 +437,6 @@ export function JobDetailView({
                 </span>
               )}
             </div>
-
-            {/* Activity — the full transcript once it settles, else the accumulated
-                live progress lines so the stream is kept, not just the latest. */}
             {(traceText || editLog.length > 0) && (
               <>
                 <ModalSection>activity</ModalSection>
@@ -608,8 +454,6 @@ export function JobDetailView({
                 )}
               </>
             )}
-
-            {/* Report + files (once settled). */}
             {editSettled && editRun.message && (
               <>
                 <ModalSection>report</ModalSection>
@@ -622,7 +466,6 @@ export function JobDetailView({
                 <ArtifactList artifacts={editRun.artifacts} />
               </>
             ) : null}
-
             <div className="mt-5">
               <button className={btnPrimary} onClick={exitEdit}>
                 {editSettled ? 'Done' : 'Back to detail'}
@@ -630,7 +473,6 @@ export function JobDetailView({
             </div>
           </div>
         ) : (
-          // ---- compose: describe the change, dispatch it ----
           <>
             <div className="mt-4 text-[13px] leading-snug text-secondary">
               Describe the change — Claude Code on {onMachine} applies it (schedule, cadence, or what the loop does).
@@ -645,11 +487,7 @@ export function JobDetailView({
             />
             {actionErrEl}
             <div className="mt-4 flex flex-wrap items-center gap-2.5">
-              <button
-                className={btnCost}
-                disabled={pending === 'edit' || !editInstruction.trim()}
-                onClick={() => void onRequestEdit()}
-              >
+              <button className={btnCost} disabled={pending === 'edit' || !editInstruction.trim()} onClick={() => void onRequestEdit()}>
                 {pending === 'edit' ? 'Dispatching…' : 'Dispatch to Claude Code'}
               </button>
               <button className={btn} disabled={pending === 'edit'} onClick={exitEdit}>
@@ -668,14 +506,14 @@ export function JobDetailView({
             </div>
           </>
         )}
-      </>
+      </Shell>
     )
   }
 
-  // ---- edit mode: a focused full-width form replacing the read body ----
+  // ---- manual field-form edit mode ----
   if (editing) {
     return (
-      <>
+      <Shell back={backLink}>
         <ModalHead title={`Edit · ${s.name}`} />
         <button
           type="button"
@@ -696,65 +534,190 @@ export function JobDetailView({
             </button>
           </div>
         </div>
-      </>
+      </Shell>
     )
   }
 
-  // ---- read mode ----
-  // The action toolbar (verbs + transient notices) — heads the right "controls"
-  // column in the split layout, or the whole stack in the plain layout.
-  const toolbar = (
-    <div>
-      {offlineEl}
-      {actionErrEl}
-      {flashLine}
-      {actionBar}
-    </div>
-  )
+  // ---- read mode (the page) ----
+  const agentLabel = AGENT_LABEL[job.agent ?? 'claude-code'] ?? job.agent ?? 'Claude Code'
+  const metaDot = <span className="text-wire">·</span>
 
-  // Two columns of meaning: LEFT = output (live dashboard + the runs behind it),
-  // RIGHT = definition + controls (action verbs + task spec). Stacks below `lg`.
-  // The LEFT column drives the height (dashboard + its capped runs); the grid
-  // stretches the RIGHT column to match, where the task fills the leftover and
-  // scrolls — so the modal is sized to its content, not the viewport, and the two
-  // columns bottom-align. (The task is absolutely-positioned, so its long content
-  // can't inflate the row — see taskBlock.)
-  const body = hasUi ? (
-    <div className="mt-5 grid grid-cols-1 gap-x-9 gap-y-6 lg:grid-cols-2">
-      <div className="min-w-0">
-        <LoopView html={job.ui!} runs={runs} />
-        {runsBlock}
-        {filesBlock}
+  return (
+    <Shell back={backLink}>
+      {/* header */}
+      <header className="rounded-2xl border border-wire bg-surface px-6 pb-5 pt-[22px]">
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-[30px] font-medium leading-tight tracking-tight text-display">{s.name}</h1>
+              {s.running && (
+                <span className="inline-flex h-5 items-center gap-1.5 rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-display">
+                  <span className="size-1.5 rounded-full" style={runPulseStyle} />
+                  Running
+                </span>
+              )}
+              {done ? (
+                <span className="inline-flex h-5 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-display">
+                  Done
+                </span>
+              ) : !s.enabled ? (
+                <span className="inline-flex h-5 items-center rounded border border-wire px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary">
+                  Paused
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[12.5px] tracking-[0.02em] text-secondary">
+              <span className="text-primary" title={job.cron}>
+                {cronText(job.cron)}
+              </span>
+              {metaDot}
+              <span>next {fmt(s.nextRun)}</span>
+              {s.nextRun && s.enabled && !done && <span className="text-disabled">({until(s.nextRun)})</span>}
+              {metaDot}
+              <span title="Recorded coding agent">{agentLabel}</span>
+              {metaDot}
+              <span className="inline-flex items-center gap-1.5" title={online ? 'Machine online' : 'Machine offline'}>
+                <span className={`size-1.5 rounded-full ${online ? 'bg-[color:var(--color-ok,#16a34a)]' : 'bg-disabled'}`} />
+                {detail.machine.name || 'machine'}
+              </span>
+              {metaDot}
+              <code className="font-mono text-disabled">{s.id}</code>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 border-t border-hairline pt-4">
+          {offlineEl}
+          {actionErrEl}
+          {flashLine}
+          {actionBar}
+        </div>
+      </header>
+
+      {/* agent-authored dashboard (when present) */}
+      {hasUi && (
+        <section className="mt-6 rounded-2xl border border-wire bg-surface px-6 py-5">
+          <div className="mb-3.5 border-b border-hairline pb-1.5 font-mono text-[11px] tracking-[0.08em] text-secondary">dashboard</div>
+          <LoopView html={job.ui!} runs={runs} />
+        </section>
+      )}
+
+      {/* files (unified) + runs */}
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1.55fr_1fr]">
+        <LoopFilesPanel
+          loopId={id}
+          taskFile={job.taskFile}
+          taskFileContent={detail.taskFileContent}
+          taskFileSyncedAt={detail.taskFileSyncedAt}
+          running={running}
+        />
+        <RunsSection
+          loopId={id}
+          summary={s}
+          runs={runs}
+          older={older}
+          onMore={async () => {
+            const seed = older.length ? mergeRuns(s.runs ?? [], older) : s.runs ?? []
+            const oldest = seed[0]
+            if (!oldest) return 0
+            const more = await loadOlderRuns({ data: { loopId: id, beforeTs: oldest.ts, limit: WINDOW } })
+            if (more.length) setOlder((prev) => mergeRuns(prev, more))
+            return more.length
+          }}
+          onPickRun={(run) => navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: id, runId: run.id } })}
+        />
       </div>
-      <div className="min-w-0 lg:flex lg:flex-col">
-        {toolbar}
-        {taskBlock(true)}
-      </div>
-    </div>
-  ) : (
-    // Plain layout (no agent-authored UI yet): a single column — toolbar, then
-    // task spec, run history, then the loop's synced files. Each stays capped.
-    <div className="mt-5">
-      {toolbar}
-      {taskBlock(false)}
-      {runsBlock}
-      {filesBlock}
-    </div>
+
+      <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} />
+    </Shell>
+  )
+}
+
+/** The page shell — centered column, a back affordance, consistent padding. */
+function Shell({ back, children }: { back: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <main className="mx-auto max-w-[1180px] px-8 pb-24 pt-10">
+      <div className="mb-5">{back}</div>
+      {children}
+    </main>
+  )
+}
+
+/** The runs panel — the signature timeline strip (paged) over a scannable list
+ *  of recent runs, each row linking to its own run-detail route. */
+function RunsSection({
+  loopId,
+  summary,
+  runs,
+  older,
+  onMore,
+  onPickRun,
+}: {
+  loopId: string
+  summary: JobDetail['summary']
+  runs: RunSummary[] // newest-first (for the list)
+  older: RunSummary[]
+  onMore: () => Promise<number>
+  onPickRun: (run: RunSummary) => void
+}) {
+  // The timeline strip wants chronological (oldest-first) runs; the summary seeds
+  // the newest page and `older` grows it leftward, same as a dashboard card.
+  const stripRuns = useMemo(
+    () => (older.length ? mergeRuns(summary.runs ?? [], older) : summary.runs ?? []),
+    [summary.runs, older],
   )
 
   return (
-    <>
-      <ModalHead
-        title={s.name}
-        sub={
-          <>
-            <code className="font-mono">{s.id}</code> · next {fmt(s.nextRun)}
-            {s.graduation ? ` · ${s.graduation}` : ''}
-          </>
-        }
-      />
+    <section className="min-w-0">
+      <div className="mb-2.5 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">
+        <h2 className="font-mono text-[11px] tracking-[0.08em] text-secondary">runs ({summary.runCount})</h2>
+      </div>
 
-      {body}
-    </>
+      {summary.runCount === 0 ? (
+        <div className="rounded-xl border border-wire bg-surface px-5 py-10 text-center text-[13px] text-disabled">never run</div>
+      ) : (
+        <div className="rounded-2xl border border-wire bg-surface px-5 pb-4 pt-5">
+          <Timeline job={summary} runs={stripRuns} total={summary.runCount} onLoadMore={onMore} onPickRun={onPickRun} />
+
+          <ul className="mt-5 max-h-[clamp(280px,46vh,520px)] divide-y divide-hairline overflow-y-auto border-t border-hairline">
+            {runs.map((x) => (
+              <li key={x.id}>
+                <Link
+                  to="/loops/$loopId/runs/$runId"
+                  params={{ loopId, runId: x.id }}
+                  className="flex items-start gap-2.5 py-2.5 transition-colors hover:bg-raised"
+                >
+                  <span
+                    className="mt-1 inline-block size-2.5 shrink-0 rounded-[2px]"
+                    style={{ background: dotColor(x) }}
+                    title={dotLabel(x)}
+                    aria-label={dotLabel(x)}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline justify-between gap-2">
+                      <span className="font-mono text-[12px] text-secondary">{tsShort(x.ts)}</span>
+                      <span className="shrink-0 font-mono text-[11px] text-disabled">{dur(x.durationMs)}</span>
+                    </span>
+                    <span className="mt-0.5 block">
+                      {x.running && x.progress ? (
+                        <span className="inline-flex items-center gap-2 font-mono text-[12px] text-secondary">
+                          <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-[color:var(--color-display)]" />
+                          <span className="text-disabled">{x.progress.step}</span>
+                          <span className="truncate">{x.progress.label}</span>
+                        </span>
+                      ) : x.error ? (
+                        <span className="line-clamp-2 text-[12.5px] text-secondary">{x.error}</span>
+                      ) : (
+                        <span className="line-clamp-2 text-[12.5px] text-primary">{x.message || dotLabel(x)}</span>
+                      )}
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   )
 }

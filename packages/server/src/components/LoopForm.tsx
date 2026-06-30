@@ -90,7 +90,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
   function LoopForm({ initial, channels: channelsProp }, ref) {
     const [f, setF] = useState<FormState>(() => initState(initial))
     const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((s) => ({ ...s, [k]: v }))
-    // The parent (JobDetailView) already holds the team's channel list — reuse it
+    // The parent (LoopDetailView) already holds the team's channel list — reuse it
     // when handed down, and only self-fetch when rendered standalone.
     const [fetched, setFetched] = useState<ChannelSummary[]>([])
     const channels = channelsProp ?? fetched

@@ -18,11 +18,17 @@ const MD_SANITIZE: Config = {
   ALLOWED_ATTR: ['href', 'title', 'target', 'rel', 'src', 'alt'],
 }
 
-export function TaskFileView({ content, fill }: { content: string; fill?: boolean }) {
+export function TaskFileView({ content, fill, bare }: { content: string; fill?: boolean; bare?: boolean }) {
   const html = useMemo(
     () => DOMPurify.sanitize(marked.parse(content, { async: false, gfm: true }) as string, MD_SANITIZE),
     [content],
   )
+
+  // `bare`: render just the formatted prose with no inset/cap of its own — the
+  // host (e.g. the unified Files viewer) owns the surface, padding, and scroll.
+  if (bare) {
+    return <div className="taskmd px-5 py-4" dangerouslySetInnerHTML={{ __html: html }} />
+  }
 
   // A faint inset (bg-raised — the system's surface for code/insets) sets the
   // document apart from the modal. Capped block by default; when `fill`, it

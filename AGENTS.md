@@ -199,6 +199,38 @@ LLM and executes no user code**.
   map so a snippet pasted after a server restart still files correctly; and the
   team-member **invitation UI** — without it only superadmins can be multi-team, so
   this path is admin-only in practice today.
+- **Loop detail is a PAGE, not a modal (`/loops/$loopId`).** The old dashboard
+  modal (`JobDetailView` + `RunView` inside `Modal`) was retired for dedicated
+  routes. `routes/loops.$loopId.tsx` → `components/LoopDetailView.tsx` (the loop
+  page body: a header card with name/cron/next/agent/machine-status/id + the action
+  toolbar [Run once / Edit / ··· menu], an optional agent-authored `LoopView`
+  dashboard, then a 2-col `[1.55fr_1fr]` grid of the **unified Files panel** and the
+  **Runs** section). The dashboard (`routes/index.tsx`) + `LoopCard` now **navigate**
+  (`useNavigate`) instead of `setView` — no more `Modal` for detail. The page owns
+  its own `getJobDetail` fetch + self-poll (3s while a run is live, else 8s; ssr:false
+  so the session cookie rides along), same cadence as the old modal. The edit paths
+  (hand-to-Claude-Code via `requestEdit`; manual `LoopForm` fallback) survive as
+  in-page mode takeovers. Reconnect opens `MachinesModal` rendered on the page itself.
+- **Unified Files panel (`components/LoopFilesPanel.tsx`).** Merges the former
+  separate task-file box + `FilesView` (both DELETED) into ONE master-detail: a file
+  list (task file pinned first with a `TASK` chip, then synced artifacts path-sorted)
+  drives a content viewer; the **task file is selected by default**. Reuses the Phase
+  2 server fns — `getArtifacts` (self-polls by loopId) for the list, `getArtifact`
+  for text bodies; markdown (task file + `*.md`) renders via `TaskFileView` (now takes
+  a `bare` prop = no own inset/scroll, host owns the surface), other text in a mono
+  `<pre>`, binary/oversize → the existing `/api/artifact/$loopId/$` download route.
+  An artifact whose path equals the task file is de-duped (one canonical entry).
+- **Run detail is its own route (`/loops/$loopId/runs/$runId`).** `RunView.tsx` now
+  exports **`RunDetailView`** (page-oriented; the old modal `RunView` is gone). The
+  route file is `loops.$loopId_.runs.$runId.tsx` — the trailing `_` on the `$loopId`
+  segment **un-nests** it from the loop page (standalone full page, deep-linkable +
+  browser-back, not nested in an `<Outlet/>`). It resolves the run from
+  `getJobDetail(loopId).runs` (reuse, NO new backend — caveat: only the latest ~100
+  runs are in that payload; older paged runs degrade to a calm "no longer available"),
+  self-polls while running, and renders the Phase-3 `getRunDiff` "Changes" + the
+  `getTranscript` execution trace. Run rows in the loop page's Runs list + the
+  `Timeline` strip `onPickRun` both `<Link>`/navigate here. Screenshots of the four
+  states live in `docs/screenshots/loop-detail-page/`.
 
 ## Commands
 

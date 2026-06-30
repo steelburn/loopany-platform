@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
-import type { ArtifactSummary, RunDiffFile, RunDiffResult, RunSummary, TranscriptResult } from '../types'
+import { useCallback, useEffect, useState } from 'react'
+import { Link } from '@tanstack/react-router'
+import type { ArtifactSummary, JobDetail, RunDiffFile, RunDiffResult, RunSummary, TranscriptResult } from '../types'
 import { dur, fmt, formatTranscript, humanBytes } from '../lib/format'
-import { cancelRun, getArtifacts, getRunDiff, getTranscript } from '../server/loopApi'
+import { cancelRun, getArtifacts, getJobDetail, getRunDiff, getTranscript } from '../server/loopApi'
 import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
-import { ModalHead, ModalSection } from './Modal'
+import { ModalSection } from './Modal'
 import { btn, btnDanger, Pre, StatusPill } from './ui'
 
 function Row({ k, children }: { k: string; children: React.ReactNode }) {
@@ -215,37 +216,80 @@ function SessionId({ id }: { id: string }) {
   )
 }
 
-export function RunView({
-  jobName,
-  run,
-  onOpenLoop,
-  onChanged,
-  onClose,
-}: {
-  jobName: string
-  run: RunSummary
-  onOpenLoop: () => void
-  onChanged: () => void
-  onClose: () => void
-}) {
+/**
+ * Run detail PAGE body — its own route (`/loops/$loopId/runs/$runId`). Resolves
+ * the run by id from the loop's detail payload (reusing getJobDetail, no new
+ * backend), self-polls while it's in flight, and renders the run's report, the
+ * per-run diff (Phase 3 "Changes"), and the execution transcript. The route
+ * supplies the back/return chrome; the in-body link returns to the whole loop.
+ */
+export function RunDetailView({ loopId, runId }: { loopId: string; runId: string }) {
+  const [detail, setDetail] = useState<JobDetail | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      setDetail(await getJobDetail({ data: loopId }))
+    } catch (e) {
+      setErr(String(e))
+    }
+  }, [loopId])
+
+  useEffect(() => {
+    setDetail(null)
+    setErr(null)
+    void load()
+  }, [loopId, runId, load])
+
+  const run = detail?.runs.find((r) => r.id === runId) ?? null
+
+  // Keep a live run streaming in (its transcript + diff settle once it finishes).
+  const running = !!run?.running
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(() => void load(), 3_000)
+    return () => clearInterval(t)
+  }, [running, load])
+
   async function onStop() {
+    if (!run) return
     if (!confirm('Stop this run? It will be marked canceled.')) return
     const r = await cancelRun({ data: run.id })
     if (r?.error) {
       alert(`Stop failed: ${r.error}`)
       return
     }
-    onChanged()
-    onClose()
+    await load()
   }
+
+  if (err) return <div className="font-mono text-[13px] text-accent">[ ERROR ] {err}</div>
+  if (!detail) return <div className="font-mono text-[12px] tracking-[0.08em] text-secondary">[ Loading ]</div>
+  if (!run)
+    return (
+      <div className="rounded-xl border border-wire bg-surface px-6 py-10 text-center">
+        <div className="text-[14px] text-secondary">This run is no longer available.</div>
+        <Link
+          to="/loops/$loopId"
+          params={{ loopId }}
+          className="mt-3 inline-block font-mono text-[12px] tracking-[0.08em] text-interactive underline underline-offset-2 hover:text-display"
+        >
+          ← back to the loop
+        </Link>
+      </div>
+    )
+
+  const jobName = detail.summary.name
   return (
     <>
-      <ModalHead title={`One run · ${jobName}`} sub={fmt(run.ts)} />
-      <table className="mt-3.5 w-full text-[13px]">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-[26px] font-medium tracking-tight text-display">Run · {jobName}</h1>
+          <div className="mt-1.5 font-mono text-[12px] tracking-[0.02em] text-secondary">{fmt(run.ts)}</div>
+        </div>
+        <StatusPill run={run} colorText />
+      </div>
+      <table className="mt-5 w-full text-[13px]">
         <tbody>
-          <Row k="Outcome">
-            <StatusPill run={run} />
-          </Row>
           {run.status && <Row k="Status">{run.status}</Row>}
           {run.durationMs != null && <Row k="Duration">{dur(run.durationMs)}</Row>}
           {run.sample != null && <Row k="sample">{String(run.sample)}</Row>}
@@ -298,9 +342,9 @@ export function RunView({
       )}
 
       <div className="mt-[18px] flex flex-wrap gap-2.5">
-        <button type="button" onClick={onOpenLoop} className={btn}>
+        <Link to="/loops/$loopId" params={{ loopId }} className={btn}>
           View the whole loop →
-        </button>
+        </Link>
         {run.running && (
           <button type="button" onClick={onStop} className={btnDanger}>
             Stop run
