@@ -773,15 +773,24 @@ export class MachineGateway {
       // against the real byte length regardless.
       const fileSize = inlined?.length ?? (sizeOk ? rawSize : BLOB_CAP);
       const addsNewBytes = !(store.blobExists(hash) || toStore.has(hash) || needHashes.has(hash));
-      if (addsNewBytes && projectedBytes + fileSize > bytesCap) {
-        // Per-loop storage cap reached → refuse THIS new file's bytes. Skip the row
-        // too (never leave an artifact pointing at a blob we won't store). Existing
-        // files + deletions below still reconcile, so the loop is never wedged.
-        capExceeded = true;
-        rejectedPaths.push(rel);
-        continue;
+      if (addsNewBytes) {
+        // Cap only the NET growth: overwriting an existing live, byte-backed row at
+        // `rel` FREES its currently-counted bytes (the upsert below replaces it), so
+        // a loop regenerating one large file in place (the running-memory model)
+        // never falsely trips the cap. Only genuinely new paths / size increases count.
+        const prior = store.getArtifactFile(loopId, rel);
+        const freed = prior && !prior.deleted && !prior.oversize && prior.hash ? (prior.size ?? 0) : 0;
+        const projectedAfter = projectedBytes + fileSize - freed;
+        if (projectedAfter > bytesCap) {
+          // Per-loop storage cap reached → refuse THIS new file's bytes. Skip the row
+          // too (never leave an artifact pointing at a blob we won't store). Existing
+          // files + deletions below still reconcile, so the loop is never wedged.
+          capExceeded = true;
+          rejectedPaths.push(rel);
+          continue;
+        }
+        projectedBytes = projectedAfter;
       }
-      if (addsNewBytes) projectedBytes += fileSize;
 
       if (inlined) toStore.set(hash, inlined);
       else if (!store.blobExists(hash)) needHashes.add(hash);

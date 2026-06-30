@@ -535,19 +535,15 @@ export function pruneRunSnapshots(loopId: string, keep: number): number {
         .all()
         .map((r) => r.runId)
     : [];
-  const victims = db
-    .select({ runId: runSnapshots.runId })
-    .from(runSnapshots)
-    .where(
-      survivors.length
-        ? and(eq(runSnapshots.loopId, loopId), notInArray(runSnapshots.runId, survivors))
-        : eq(runSnapshots.loopId, loopId),
-    )
-    .all()
-    .map((r) => r.runId);
-  if (!victims.length) return 0;
-  db.delete(runSnapshots).where(inArray(runSnapshots.runId, victims)).run();
-  return victims.length;
+  // Delete by the loop + NOT-IN-survivors predicate directly, NOT by an inArray of
+  // every victim runId: survivors is bounded by `keep` (≤20), so this binds a small,
+  // fixed number of variables even when a pre-feature backlog leaves thousands of
+  // snapshots to prune in one pass — no "too many SQL variables" on the first prune.
+  const pred = survivors.length
+    ? and(eq(runSnapshots.loopId, loopId), notInArray(runSnapshots.runId, survivors))
+    : eq(runSnapshots.loopId, loopId);
+  const r = db.delete(runSnapshots).where(pred).run();
+  return r.changes;
 }
 
 /** Distinct loop ids that currently have at least one run snapshot. */
@@ -600,17 +596,33 @@ export function deleteBlob(hash: string): void {
   db.delete(blobs).where(eq(blobs.hash, hash)).run();
 }
 
-/** Point check: is this single hash still referenced by any artifact_files row?
- *  Used by the GC as a per-candidate guard during the byte-reclaim pass — if a
- *  concurrent sync re-referenced the hash mid-pass, its bytes are kept. Only the
- *  artifact_files table is consulted (indexed point query): a garbage blob can
- *  become re-referenced mid-pass ONLY via a live artifact_files row, because a
- *  run_snapshot is written solely at report() and built from the live file set
- *  (buildLoopManifest), so any snapshot reference implies a live file reference.
- *  The full snapshot scan stays in liveBlobRefs (the bulk keep-set computed once
- *  at pass start, where snapshots existing then must be honored). */
+/** Point check: is this single hash still referenced by any LIVE artifact_files row
+ *  OR any retained run_snapshot? Used by the GC as a per-candidate guard during the
+ *  byte-reclaim pass — if a concurrent sync re-referenced the hash (or a report()
+ *  captured it into a retained snapshot) mid-pass, its bytes are kept. The cheap
+ *  indexed artifact_files point query runs first (the common re-reference path); only
+ *  when it misses do we scan snapshots, so the JSON-manifest scan is bounded to the
+ *  few garbage candidates that survive the file check. This closes the GC-check-time
+ *  gap where a snapshot can come to reference a hash no live file row does (a sync
+ *  re-references an old garbage hash → report() snapshots it → a later sync removes
+ *  the file row), which the artifact_files-only guard would wrongly collect.
+ *  The bulk keep-set (liveBlobRefs) still does the one full snapshot scan at pass start. */
 export function blobIsReferenced(hash: string): boolean {
-  return !!db.select({ id: artifactFiles.id }).from(artifactFiles).where(eq(artifactFiles.hash, hash)).get();
+  if (db.select({ id: artifactFiles.id }).from(artifactFiles).where(eq(artifactFiles.hash, hash)).get()) {
+    return true;
+  }
+  return snapshotReferencesHash(hash);
+}
+
+/** Does any retained run_snapshot's manifest reference this blob hash? (bounded
+ *  snapshot scan — the GC's per-candidate fallback guard). */
+export function snapshotReferencesHash(hash: string): boolean {
+  for (const r of db.select({ manifest: runSnapshots.manifest }).from(runSnapshots).all()) {
+    for (const entry of Object.values(r.manifest)) {
+      if (entry?.hash === hash) return true;
+    }
+  }
+  return false;
 }
 
 /** Distinct loop ids with a LIVE (non-deleted) file row pointing at this hash.

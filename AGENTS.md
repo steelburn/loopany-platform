@@ -201,26 +201,36 @@ LLM and executes no user code**.
   referencing the hash + recreating the `blobs` row mid-await), `blobExists()` still goes
   false and that file re-uploads its bytes on the next sync — the GC NEVER leaves a live
   `blobs` row pointing at deleted bytes. A failed byte-delete leaves both bytes and metadata
-  intact, so a later pass retries (no dangling row). `store.blobIsReferenced` is now an
-  **indexed** artifact_files-only point query (`artifact_files_hash_idx`, migration `0014`):
-  a garbage blob can only become re-referenced mid-pass via a live artifact_files row (a
-  snapshot is written solely at `report()` and built from the live file set, so any snapshot
-  ref implies a live file ref), so the recheck needs no snapshot scan — the full snapshot
-  scan stays only in `liveBlobRefs` (the bulk keep-set computed once at pass start). Bias: a
+  intact, so a later pass retries (no dangling row). `store.blobIsReferenced` does the
+  **indexed** artifact_files point query (`artifact_files_hash_idx`, migration `0014`) FIRST
+  (the common re-reference path) and, only on a miss, a **bounded** `store.snapshotReferencesHash`
+  scan of retained snapshots — so a blob that came to be referenced by a retained snapshot at
+  GC-CHECK time (a sync re-references an old garbage hash → `report()` snapshots it → a later
+  sync removes the file row) is never byte-deleted, closing the residual gap in the
+  never-delete-a-snapshot's-blob invariant. The JSON-manifest scan is gated behind the file
+  miss, so it touches only the few garbage candidates; the full snapshot scan in the bulk path
+  stays solely in `liveBlobRefs` (the keep-set computed once at pass start). Bias: a
   leaked blob is a cost bug the next pass reclaims; a wrongly-deleted blob would be data
   loss, so when in doubt KEEP.
   **(2) Snapshot retention** — `store.pruneRunSnapshots(loopId, keep)` keeps the newest
   `keep` (by `createdAt`); `LOOPANY_SNAPSHOT_RETENTION` default **20** (the diff only needs
   the prior snapshot; 20 keeps ample "Changes" history while bounding blob retention).
   Pruned at `report()` time (prompt, cheap) AND in the periodic pass. Pruning is what
-  unpins old blobs so the GC can collect them. **(3) Per-loop byte cap** — `store.loopStoredBytes`
+  unpins old blobs so the GC can collect them. The delete is by the `loopId AND runId NOT IN
+  (survivors)` predicate (survivors bounded by `keep` ≤20), NOT an `inArray` of every victim
+  runId, so a large pre-feature backlog prunes in one statement without tripping SQLite's
+  bound-variable limit. **(3) Per-loop byte cap** — `store.loopStoredBytes`
   (sum of live, byte-backed `artifact_files.size`); `sync()` tracks a projected footprint
   and, when accepting a file's NEW bytes (a hash the server doesn't already have — dedup
   reuse adds none) would exceed `LOOPANY_LOOP_BYTES_CAP` (default **500MB**), rejects THAT
   file (skips its bytes + row, NOT tombstoned — prior version kept) and surfaces
   `{capExceeded, bytesUsed, bytesCap, rejected:[paths]}` on the sync response (mirrors the
   per-file 10MB oversize signal); existing files + deletions still reconcile so the loop
-  never wedges. The cap is enforced in **two places** so a client-reported size can't bypass
+  never wedges. The cap counts only NET growth: when a manifest path overwrites an existing
+  live, byte-backed row, that row's currently-counted size is subtracted (the upsert frees it)
+  before the new bytes are added, so a loop regenerating one large file IN PLACE (the
+  running-memory model) never falsely trips the cap — only new paths / genuine size increases
+  count. The cap is enforced in **two places** so a client-reported size can't bypass
   it: in `sync()` a non-inline file with a missing/invalid size is sized at `BLOB_CAP` (10MB,
   conservative — never `0`, which would slip past the projected-footprint check) instead of
   trusting the client; and authoritatively at **`putBlob`** (the uncapped-before route), which
