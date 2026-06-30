@@ -24,16 +24,28 @@ const basename = (path: string) => path.split('/').pop() || path
  * normalized path instead: equal whole paths, one a path-segment suffix of the
  * other, or (last resort) equal basename.
  */
-export function isTaskPath(taskFile: string | undefined, artifactPath: string): boolean {
-  if (!taskFile) return false
-  const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '')
+const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '')
+
+/**
+ * Strength of the task↔artifact match: 3 = exact normalized path, 2 = whole-
+ * segment suffix (either direction), 1 = equal basename (last resort), 0 = none.
+ * Used to pick the BEST candidate artifact rather than the first array match —
+ * the basename fallback otherwise lets e.g. `ARCHIVE/README.md` masquerade as
+ * the task when the real root `README.md` is the intended one.
+ */
+export function taskMatchRank(taskFile: string | undefined, artifactPath: string): 0 | 1 | 2 | 3 {
+  if (!taskFile) return 0
   const a = norm(taskFile)
   const b = norm(artifactPath)
-  if (!a || !b) return false
-  if (a === b) return true
+  if (!a || !b) return 0
+  if (a === b) return 3
   // suffix match on whole segments: ".../loop/README.md" endsWith "loop/README.md"
-  if (a.endsWith('/' + b) || b.endsWith('/' + a)) return true
-  return basename(a) === basename(b)
+  if (a.endsWith('/' + b) || b.endsWith('/' + a)) return 2
+  return basename(a) === basename(b) ? 1 : 0
+}
+
+export function isTaskPath(taskFile: string | undefined, artifactPath: string): boolean {
+  return taskMatchRank(taskFile, artifactPath) > 0
 }
 
 /**
@@ -44,7 +56,21 @@ export function isTaskPath(taskFile: string | undefined, artifactPath: string): 
  *     the loop record, so a brand-new loop still shows its spec.
  */
 export function buildFileEntries(taskFile: string | undefined, artifacts: ArtifactSummary[]): FileEntry[] {
-  const taskArtifact = taskFile ? artifacts.find((f) => isTaskPath(taskFile, f.path)) : undefined
+  const depth = (p: string) => norm(p).split('/').length
+  let taskArtifact: ArtifactSummary | undefined
+  let bestRank = 0
+  if (taskFile) {
+    for (const f of artifacts) {
+      const rank = taskMatchRank(taskFile, f.path)
+      if (rank === 0) continue
+      // Highest tier wins; within a tier prefer the shallowest path so a
+      // top-level README.md beats ARCHIVE/README.md regardless of sort order.
+      if (rank > bestRank || (rank === bestRank && taskArtifact && depth(f.path) < depth(taskArtifact.path))) {
+        taskArtifact = f
+        bestRank = rank
+      }
+    }
+  }
   const out: FileEntry[] = []
   if (taskArtifact) out.push({ kind: 'artifact', path: taskArtifact.path, file: taskArtifact, task: true })
   else if (taskFile) out.push({ kind: 'task', path: taskFile })

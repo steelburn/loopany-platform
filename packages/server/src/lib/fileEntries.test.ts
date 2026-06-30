@@ -50,6 +50,23 @@ describe('buildFileEntries', () => {
     expect(entries.map((e) => e.path)).toEqual(['README.md', 'articles/2026-06-30.md'])
   })
 
+  it('prefers a stronger suffix match over a basename collision in a subdir', () => {
+    const entries = buildFileEntries('/Users/me/work/loop/hn/README.md', [
+      art('ARCHIVE/README.md'),
+      art('hn/README.md'),
+    ])
+    expect(entries[0]).toMatchObject({ kind: 'artifact', path: 'hn/README.md', task: true })
+    expect(entries.filter((e) => isTaskEntry(e))).toHaveLength(1)
+    expect(entries.map((e) => e.path)).toEqual(['hn/README.md', 'ARCHIVE/README.md'])
+  })
+
+  it('breaks a basename tie by preferring the shallowest path', () => {
+    const entries = buildFileEntries('/x/README.md', [art('ARCHIVE/README.md'), art('README.md')])
+    expect(entries[0]).toMatchObject({ kind: 'artifact', path: 'README.md', task: true })
+    expect(entries.filter((e) => isTaskEntry(e))).toHaveLength(1)
+    expect(entries.map((e) => e.path)).toEqual(['README.md', 'ARCHIVE/README.md'])
+  })
+
   it('falls back to a single synthetic task entry before the first sync', () => {
     const entries = buildFileEntries('/Users/me/work/loop/README.md', [])
     expect(entries).toHaveLength(1)
