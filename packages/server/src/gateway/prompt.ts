@@ -2,18 +2,24 @@
  * Builds the exec-loop standing system prompt + per-run task on the SERVER, to
  * ship inside a delivery (the machine just writes the prompt to a file and runs
  * claude with it). Ported from c0's loop-prompt.ts, bound to the new Loop row
- * and the renamed `loopany` CLI. Prompt prose lives as markdown under
- * scheduler/prompts/ (loaded + `{{token}}`-filled here).
+ * and the renamed `loopany` CLI. Prompt prose lives as markdown loaded +
+ * `{{token}}`-filled here. The `evolve` text is the SINGLE source of truth shared
+ * with the installable agent skill (skill/references/evolve.md) — run-dispatch and
+ * the skill read the same file, so the evolution guidance can't drift. The
+ * run-only prompts (control-on/off, exec-loop) and `edit` (a run-token verb prompt
+ * with no authoring twin — see skill/references/update.md for the authoring CLI)
+ * stay under scheduler/prompts/.
  */
 import type { Loop, Run, StateField } from "../db/schema.js";
 
 // Inlined at build time (Vite ?raw) so the prompt prose ships inside the nitro
 // bundle. Reading them from disk at runtime broke in prod: nitro bundles JS only,
-// so `../scheduler/prompts/*.md` doesn't exist under .output and poll() threw ENOENT.
+// so the `*.md` source files don't exist under .output and poll() threw ENOENT.
+// `?raw` resolves identically from skill/references/ as from scheduler/prompts/.
 import controlOn from "../scheduler/prompts/control-on.md?raw";
 import controlOff from "../scheduler/prompts/control-off.md?raw";
 import execLoop from "../scheduler/prompts/exec-loop.md?raw";
-import evolve from "../scheduler/prompts/evolve.md?raw";
+import evolve from "../skill/references/evolve.md?raw";
 import edit from "../scheduler/prompts/edit.md?raw";
 
 const PROMPTS: Record<string, string> = {
