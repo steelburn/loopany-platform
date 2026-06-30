@@ -110,7 +110,7 @@ LLM and executes no user code**.
 - **Daemon CLI ergonomics (`loopany --help` / `status` / `down`).** `cli.ts`
   `main()` dispatch order: in-run callback (`LOOPANY_RUN_TOKEN`+args) → `--help`/`-h`/
   `help` (`help.ts`, prints usage, exit 0, NEVER starts the daemon) → `up` → `new` →
-  `skill` → `status`/`down` (`control.ts`) → interactive verbs → fallback. The fallback
+  `skill` → `status`/`down` (`control.ts`) → `log` → interactive verbs → fallback. The fallback
   is **guarded**: bare `loopany` (no args) OR a leading `DAEMON_FLAGS` token
   (`--server-url`/`--api-key`, the detached spawn re-execs us that way) runs the daemon;
   **any other leading verb/flag errors `unknown command … try --help` (exit 2)** rather
