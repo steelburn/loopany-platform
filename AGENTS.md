@@ -225,12 +225,16 @@ LLM and executes no user code**.
   route file is `loops.$loopId_.runs.$runId.tsx` — the trailing `_` on the `$loopId`
   segment **un-nests** it from the loop page (standalone full page, deep-linkable +
   browser-back, not nested in an `<Outlet/>`). It resolves the run from
-  `getJobDetail(loopId).runs` (reuse, NO new backend — caveat: only the latest ~100
-  runs are in that payload; older paged runs degrade to a calm "no longer available"),
-  self-polls while running, and renders the Phase-3 `getRunDiff` "Changes" + the
-  `getTranscript` execution trace. Run rows in the loop page's Runs list + the
-  `Timeline` strip `onPickRun` both `<Link>`/navigate here. Screenshots of the four
-  states live in `docs/screenshots/loop-detail-page/`.
+  `getJobDetail(loopId).runs` (the latest ~100); a run older than that window is
+  located by paging backward with the existing `loadOlderRuns` cursor fn (bounded
+  by `MAX_OLDER_PAGES`) so a run clickable in the `Timeline` strip never dead-ends
+  — still NO new backend. Only if the backward walk is exhausted does it show the
+  calm "no longer available" fallback. It self-polls while running (a SILENT poll,
+  separate from the err-setting initial load, so a transient blip can't brick the
+  page), refetches the `getTranscript` trace when the run settles (keyed on
+  `run.running`), and renders the Phase-3 `getRunDiff` "Changes". Run rows in the
+  loop page's Runs list + the `Timeline` strip `onPickRun` both `<Link>`/navigate
+  here. Screenshots of the four states live in `docs/screenshots/loop-detail-page/`.
 
 ## Commands
 
