@@ -181,6 +181,77 @@ LLM and executes no user code**.
   before reporting (`watcher.flushLoop` + `runner` `reportRun`) so the snapshot captures
   end-state. Old runs with no snapshot degrade to a calm fallback; zero-exec invariant
   holds (server only stores/reads bytes + computes pure-string diffs).
+- **Artifact storage retention / GC (`gateway/retention.ts`).** R2 blob bytes are
+  content-addressed + deduped; before this, nothing reclaimed a blob once the path that
+  referenced it was deleted/overwritten, so R2 grew monotonically. Three pieces, all
+  server-side, all working on BOTH the R2 and in-memory `BlobStore` (tests run in-memory).
+  **(1) Blob GC** — `BlobStore.delete(hash)` (idempotent; R2 `DeleteObjectCommand`, memory
+  `map.delete`). `retention.gcBlobs(blobStore, graceMs)` computes the LIVE keep-set
+  (`store.liveBlobRefs`: every non-null `artifact_files.hash` UNION every hash in every
+  retained `run_snapshots` manifest — tombstones carry `hash=null` so they don't pin a
+  blob) and reclaims only blobs NOT in it. CRITICAL invariant: a blob shared by multiple
+  file rows AND/OR retained snapshots is never deleted. Concurrency-safe via three guards:
+  a **grace window** (`blobGcGraceMs`, default **1h** — a blob whose `blobs.createdAt` is
+  younger is never collected, so a blob a concurrent sync just wrote/referenced is
+  untouchable); a per-candidate `store.blobIsReferenced` re-check right before the byte
+  delete (skip ⇒ keep both bytes AND metadata); and a **bytes-before-metadata delete
+  ordering** that closes a TOCTOU data-loss window. Per garbage hash the GC deletes the
+  BYTES first, then drops the metadata row **unconditionally** (no post-delete re-scan —
+  `deleteBlob` runs regardless, so re-checking referencedness afterward would only adjust a
+  counter while paying a full snapshot manifest scan on the common genuine-garbage path; the
+  pre-delete guard is the correctness gate): so even if a sync raced the byte delete (re-
+  referencing the hash + recreating the `blobs` row mid-await), `blobExists()` still goes
+  false and that file re-uploads its bytes on the next sync — the GC NEVER leaves a live
+  `blobs` row pointing at deleted bytes. A failed byte-delete leaves both bytes and metadata
+  intact, so a later pass retries (no dangling row). `store.blobIsReferenced` does the
+  **indexed** artifact_files point query (`artifact_files_hash_idx`, migration `0014`) FIRST
+  (the common re-reference path) and, only on a miss, a **bounded** `store.snapshotReferencesHash`
+  scan of retained snapshots — so a blob that came to be referenced by a retained snapshot at
+  GC-CHECK time (a sync re-references an old garbage hash → `report()` snapshots it → a later
+  sync removes the file row) is never byte-deleted, closing the residual gap in the
+  never-delete-a-snapshot's-blob invariant. The JSON-manifest scan is gated behind the file
+  miss, so it touches only the few garbage candidates; the full snapshot scan in the bulk path
+  stays solely in `liveBlobRefs` (the keep-set computed once at pass start). Bias: a
+  leaked blob is a cost bug the next pass reclaims; a wrongly-deleted blob would be data
+  loss, so when in doubt KEEP.
+  **(2) Snapshot retention** — `store.pruneRunSnapshots(loopId, keep)` keeps the newest
+  `keep` (by `createdAt`); `LOOPANY_SNAPSHOT_RETENTION` default **20** (the diff only needs
+  the prior snapshot; 20 keeps ample "Changes" history while bounding blob retention).
+  Pruned at `report()` time (prompt, cheap) AND in the periodic pass. Pruning is what
+  unpins old blobs so the GC can collect them. The delete is by the `loopId AND runId NOT IN
+  (survivors)` predicate (survivors bounded by `keep` ≤20), NOT an `inArray` of every victim
+  runId, so a large pre-feature backlog prunes in one statement without tripping SQLite's
+  bound-variable limit. **(3) Per-loop byte cap** — `store.loopStoredBytes`
+  (sum of live, byte-backed file sizes, preferring the VERIFIED `blobs.size` via a
+  `artifact_files→blobs` join and falling back to the client-reported `artifact_files.size`
+  only for a not-yet-stored/pending row — so an under-reporting daemon can't keep the base
+  artificially low and creep one blob at a time past the cap; `loopStoredBytesExcludingHash`
+  does the same for the `putBlob` re-check base); `sync()` tracks a projected footprint
+  and, when accepting a file's NEW bytes (a hash the server doesn't already have — dedup
+  reuse adds none) would exceed `LOOPANY_LOOP_BYTES_CAP` (default **500MB**), rejects THAT
+  file (skips its bytes + row, NOT tombstoned — prior version kept) and surfaces
+  `{capExceeded, bytesUsed, bytesCap, rejected:[paths]}` on the sync response (mirrors the
+  per-file 10MB oversize signal); existing files + deletions still reconcile so the loop
+  never wedges. The cap counts only NET growth: when a manifest path overwrites an existing
+  live, byte-backed row, that row's currently-counted size is subtracted (the upsert frees it)
+  before the new bytes are added, so a loop regenerating one large file IN PLACE (the
+  running-memory model) never falsely trips the cap — only new paths / genuine size increases
+  count. The cap is enforced in **two places** so a client-reported size can't bypass
+  it: in `sync()` a non-inline file with a missing/invalid size is sized at `BLOB_CAP` (10MB,
+  conservative — never `0`, which would slip past the projected-footprint check) instead of
+  trusting the client; and authoritatively at **`putBlob`** (the uncapped-before route), which
+  re-checks a NEW blob's REAL byte length against every loop that already references the hash
+  (`store.loopsReferencingHash` × `store.loopStoredBytesExcludingHash`) and, if storing would
+  exceed a loop's cap, refuses the bytes (413 `capExceeded`) and drops that loop's dangling
+  rows (`store.dropArtifactFilesForHash`) so nothing points at a blob never stored — a later
+  sync re-reconciles (self-healing). **When GC runs:** a dedicated `boot.ts` interval (`gcIntervalMs`, default
+  **15min**, independent of the faster offline-sweep) calls `gateway.maintainStorage()`
+  (prune snapshots → GC blobs; best-effort, never throws). `maintainStorage` holds an
+  **in-flight latch** (`maintenanceRunning`, released in `finally`) so a first-backlog pass
+  that overruns the interval makes the next tick skip rather than run a second pass
+  concurrently (the GC awaits blob deletes sequentially; overlap is idempotent but wastes
+  work and double-counts). All knobs are lazy env reads
+  (`env.ts`) so tests set them per-case. Tests: `gateway/retention.test.ts`.
 - **Coding-agent recording (`loops.agent`).** A loop records WHICH coding agent it's
   bound to / was created by: `loops.agent` (`text`, TS-only enum `claude-code|codex`,
   NOT NULL default `claude-code`, migration `0013`). **Recording-only** — the daemon

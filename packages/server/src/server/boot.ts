@@ -9,6 +9,7 @@
 import { runMigrations } from "../db/index.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
+import { gcIntervalMs } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
 
 interface Booted {
@@ -36,6 +37,13 @@ export function ensureServer(): Booted {
   const sweep = setInterval(() => gateway.sweep(), ONLINE_TTL_MS);
   sweep.unref?.();
   abort.signal.addEventListener("abort", () => clearInterval(sweep), { once: true });
+
+  // Storage maintenance (prune snapshots → GC unreferenced blob bytes) on its own
+  // slower cadence — keeps R2 from growing monotonically. Async + best-effort, so a
+  // slow R2 delete can't block the loop; void the promise (the method never throws).
+  const gc = setInterval(() => void gateway.maintainStorage(), gcIntervalMs());
+  gc.unref?.();
+  abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
 
   g.__loopanyBooted = { scheduler, gateway, abort };
   logger.info("loopany server booted");

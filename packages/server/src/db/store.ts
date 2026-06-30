@@ -8,7 +8,7 @@
  * swap, not a rewrite.
  */
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lt, ne, notInArray, sql } from "drizzle-orm";
 
 import { db } from "./index.js";
 import {
@@ -513,5 +513,186 @@ export function prevRunSnapshot(loopId: string, beforeTs: string): RunSnapshot |
     .limit(1)
     .get();
   return row?.snap;
+}
+
+// ---- retention / GC accounting (see gateway/retention.ts) ----
+
+/**
+ * Prune a loop's run snapshots down to the `keep` most recent (by createdAt),
+ * deleting the rest. Returns the number deleted. This is what makes an old
+ * snapshot's now-unreferenced blobs collectable by the blob GC. `keep <= 0`
+ * means "keep none" (still bounded). Safe to call repeatedly (idempotent once
+ * at/under the window).
+ */
+export function pruneRunSnapshots(loopId: string, keep: number): number {
+  const survivors = keep > 0
+    ? db
+        .select({ runId: runSnapshots.runId })
+        .from(runSnapshots)
+        .where(eq(runSnapshots.loopId, loopId))
+        .orderBy(desc(runSnapshots.createdAt), desc(runSnapshots.runId))
+        .limit(keep)
+        .all()
+        .map((r) => r.runId)
+    : [];
+  // Delete by the loop + NOT-IN-survivors predicate directly, NOT by an inArray of
+  // every victim runId: survivors is bounded by `keep` (≤20), so this binds a small,
+  // fixed number of variables even when a pre-feature backlog leaves thousands of
+  // snapshots to prune in one pass — no "too many SQL variables" on the first prune.
+  const pred = survivors.length
+    ? and(eq(runSnapshots.loopId, loopId), notInArray(runSnapshots.runId, survivors))
+    : eq(runSnapshots.loopId, loopId);
+  const r = db.delete(runSnapshots).where(pred).run();
+  return r.changes;
+}
+
+/** Distinct loop ids that currently have at least one run snapshot. */
+export function loopIdsWithSnapshots(): string[] {
+  return db
+    .selectDistinct({ loopId: runSnapshots.loopId })
+    .from(runSnapshots)
+    .all()
+    .map((r) => r.loopId);
+}
+
+/**
+ * The full set of blob hashes still referenced by a LIVE row — the GC's keep
+ * set. A hash is live if ANY artifact_files row points at it (deleted tombstones
+ * carry hash=null, so they don't pin a blob) OR ANY retained run_snapshot's
+ * manifest references it. Computed in one pass so the GC never deletes a blob a
+ * snapshot still needs for its diff.
+ */
+export function liveBlobRefs(): Set<string> {
+  const refs = new Set<string>();
+  for (const r of db
+    .selectDistinct({ hash: artifactFiles.hash })
+    .from(artifactFiles)
+    .where(isNotNull(artifactFiles.hash))
+    .all()) {
+    if (r.hash) refs.add(r.hash);
+  }
+  for (const r of db.select({ manifest: runSnapshots.manifest }).from(runSnapshots).all()) {
+    for (const entry of Object.values(r.manifest)) {
+      if (entry?.hash) refs.add(entry.hash);
+    }
+  }
+  return refs;
+}
+
+/** Blob hashes whose metadata row predates `cutoffIso` (GC candidates — the grace
+ *  window excludes freshly-written blobs a concurrent sync may be referencing). */
+export function blobHashesOlderThan(cutoffIso: string): string[] {
+  return db
+    .select({ hash: blobs.hash })
+    .from(blobs)
+    .where(lt(blobs.createdAt, cutoffIso))
+    .all()
+    .map((r) => r.hash);
+}
+
+/** Delete a blob's metadata row (the bytes are reclaimed separately via the
+ *  BlobStore). Idempotent. */
+export function deleteBlob(hash: string): void {
+  db.delete(blobs).where(eq(blobs.hash, hash)).run();
+}
+
+/** Indexed point check: does any LIVE artifact_files row still point at this hash?
+ *  The GC's cheap, always-fresh per-candidate guard (the common re-reference path) —
+ *  uses the artifact_files_hash index, so it stays O(1) even as candidates pile up. */
+export function artifactFileReferencesHash(hash: string): boolean {
+  return !!db.select({ id: artifactFiles.id }).from(artifactFiles).where(eq(artifactFiles.hash, hash)).get();
+}
+
+/** Every blob hash referenced by ANY retained run_snapshot's manifest — the full
+ *  snapshot scan deserialized ONCE into a Set so the GC can answer per-candidate
+ *  snapshot membership in O(1) instead of re-scanning the whole table per garbage
+ *  hash. The GC rebuilds this only when the snapshot row count changes (a report()
+ *  raced the pass), so a snapshot that comes to reference a hash mid-pass is still
+ *  caught — closing the GC-check-time gap where a snapshot references a hash no live
+ *  file row does — without paying O(garbage × snapshots). */
+export function snapshotBlobRefs(): Set<string> {
+  const refs = new Set<string>();
+  for (const r of db.select({ manifest: runSnapshots.manifest }).from(runSnapshots).all()) {
+    for (const entry of Object.values(r.manifest)) {
+      if (entry?.hash) refs.add(entry.hash);
+    }
+  }
+  return refs;
+}
+
+/** Count of retained run_snapshot rows — the GC's cheap change-detector for deciding
+ *  whether to rebuild its precomputed snapshotBlobRefs() set mid-pass. */
+export function countRunSnapshots(): number {
+  return db.select({ n: sql<number>`count(*)` }).from(runSnapshots).get()?.n ?? 0;
+}
+
+/** Distinct loop ids with a LIVE (non-deleted) file row pointing at this hash.
+ *  Drives the per-loop cap re-check at putBlob, where the only loop context is
+ *  the artifact_files rows a prior sync already wrote for the requested hash. */
+export function loopsReferencingHash(hash: string): string[] {
+  return db
+    .selectDistinct({ loopId: artifactFiles.loopId })
+    .from(artifactFiles)
+    .where(and(eq(artifactFiles.hash, hash), eq(artifactFiles.deleted, false)))
+    .all()
+    .map((r) => r.loopId);
+}
+
+/** A loop's live byte footprint EXCLUDING any rows pointing at `hash` — the base
+ *  the putBlob cap guard adds the blob's REAL byte length to (the placeholder row
+ *  a sync wrote for `hash` carries a client-reported size we must not trust). Sums
+ *  the VERIFIED blobs.size where the bytes are stored, falling back to the reported
+ *  artifact_files.size only for not-yet-stored (pending) rows, so a daemon that
+ *  under-reports sizes can't keep the base artificially low. */
+export function loopStoredBytesExcludingHash(loopId: string, hash: string): number {
+  const row = db
+    .select({ total: sql<number>`coalesce(sum(coalesce(${blobs.size}, ${artifactFiles.size})), 0)` })
+    .from(artifactFiles)
+    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
+    .where(
+      and(
+        eq(artifactFiles.loopId, loopId),
+        eq(artifactFiles.deleted, false),
+        eq(artifactFiles.oversize, false),
+        isNotNull(artifactFiles.hash),
+        ne(artifactFiles.hash, hash),
+      ),
+    )
+    .get();
+  return row?.total ?? 0;
+}
+
+/** Hard-delete a loop's file rows pointing at `hash` — used when putBlob refuses
+ *  the bytes (per-loop cap), so nothing dangles pointing at a blob never stored.
+ *  Returns the number removed. */
+export function dropArtifactFilesForHash(loopId: string, hash: string): number {
+  const r = db
+    .delete(artifactFiles)
+    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.hash, hash)))
+    .run();
+  return r.changes;
+}
+
+/** A loop's current live (non-deleted) byte footprint: sum of sizes over files
+ *  that actually have bytes stored (hash non-null, not oversize). Prefers the
+ *  VERIFIED blobs.size (real length recorded at recordBlob) and only falls back to
+ *  the client-reported artifact_files.size for a row whose blob isn't stored yet
+ *  (pending), so an under-reporting daemon can't creep past the cap. This is the
+ *  figure the per-loop storage cap is enforced against. */
+export function loopStoredBytes(loopId: string): number {
+  const row = db
+    .select({ total: sql<number>`coalesce(sum(coalesce(${blobs.size}, ${artifactFiles.size})), 0)` })
+    .from(artifactFiles)
+    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
+    .where(
+      and(
+        eq(artifactFiles.loopId, loopId),
+        eq(artifactFiles.deleted, false),
+        eq(artifactFiles.oversize, false),
+        isNotNull(artifactFiles.hash),
+      ),
+    )
+    .get();
+  return row?.total ?? 0;
 }
 
