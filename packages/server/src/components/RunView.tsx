@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ArtifactSummary, RunDiffFile, RunDiffResult, RunSummary, TranscriptResult } from '../types'
-import { dur, fmt, formatTranscript } from '../lib/format'
+import { dur, fmt, formatTranscript, humanBytes } from '../lib/format'
 import { cancelRun, getArtifacts, getRunDiff, getTranscript } from '../server/loopApi'
 import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
 import { ModalHead, ModalSection } from './Modal'
@@ -34,10 +34,7 @@ function Fold({ title, sub, body }: { title: string; sub?: string; body: string 
 /** Signed byte delta — "+1.8 KB", "−240 B", "" when unknown. */
 function fmtDelta(n: number | null): string {
   if (n == null || n === 0) return ''
-  const sign = n > 0 ? '+' : '−'
-  const abs = Math.abs(n)
-  const mag = abs < 1024 ? `${abs} B` : abs < 1024 * 1024 ? `${(abs / 1024).toFixed(1)} KB` : `${(abs / (1024 * 1024)).toFixed(1)} MB`
-  return `${sign}${mag}`
+  return `${n > 0 ? '+' : '−'}${humanBytes(n)}`
 }
 
 /** Historical fallback for a run with no snapshot (predates Phase 3): the run's

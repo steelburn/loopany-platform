@@ -62,6 +62,8 @@ const TASKFILE_CAP = 256 * 1024;
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
 const TIMEOUT_MS = Number(process.env.LOOPANY_EXEC_TIMEOUT_MS || 15 * 60_000);
+/** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
+const FLUSH_TIMEOUT_MS = 2500;
 
 interface ClaudeJson {
   is_error?: boolean;
@@ -85,10 +87,15 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[]):
   const start = Date.now();
   // Force a final, run-tagged sync of the loop folder right before reporting so
   // the server's run snapshot (Phase 3) captures end-state even if a late write
-  // slipped the watcher's debounce. Best-effort — a failed flush never blocks the
-  // report (the reclaim sweep + continuous watcher still converge the server).
+  // slipped the watcher's debounce. Best-effort and bounded: the flush is raced
+  // against a short timeout so a slow/hung server can't stall run reporting (and
+  // the notification it triggers) past FLUSH_TIMEOUT_MS — the reclaim sweep + the
+  // continuous watcher still converge the server's artifact state afterward.
   const reportRun = async (body: ReportBody): Promise<void> => {
-    await flushLoop(d.loop.id).catch(() => {});
+    await Promise.race([
+      flushLoop(d.loop.id).catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
+    ]);
     return report(serverUrl, d.runToken, body);
   };
   // Server-configured roots win; the daemon's env LOOPANY_ROOTS is a fallback.

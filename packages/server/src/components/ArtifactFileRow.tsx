@@ -1,14 +1,11 @@
 import { useState } from 'react'
 import type { ArtifactContent, ArtifactSummary } from '../types'
-import { fmt } from '../lib/format'
+import { fmt, humanBytes } from '../lib/format'
 import { getArtifact } from '../server/loopApi'
 
-/** Human byte size — "1.8 KB", "3.4 MB". */
+/** Human byte size — "1.8 KB", "3.4 MB" ("" when unknown). */
 export function fmtBytes(n: number | null): string {
-  if (n == null) return ''
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return n == null ? '' : humanBytes(n)
 }
 
 /** Download URL for one artifact — the path is segment-encoded so a nested path
