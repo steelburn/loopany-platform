@@ -137,8 +137,11 @@ LLM and executes no user code**.
   one machine visible in every team its owner belongs to; `machineFns` listing + web
   `createJob` machine pick/validation use it (a machine is usable if its owner is the
   current user or a member of the active team). `machine.teamId` is RETAINED as the
-  home/default team (no-claim fallback); a brand-new machine's home team is seeded
-  from the first connect-key's intent on self-register (`poll`). The daemon is
+  home/default team (no-claim fallback); on self-register (`poll`) a machine's home
+  team is ALWAYS the owner's personal team - NOT seeded from the connect-key intent.
+  Keeping home = personal team means the fallback can never be a shared team the
+  owner is merely a (possibly later-revoked) member of; a loop's actual team comes
+  from the validated claim intent at `createLoop` time, never from this home team. The daemon is
   **unchanged** — the per-team key already travels as `claim` in `loopany new`, and
   `loopany up` keeps the single stored device token. **Phase-3 follow-ups (NOT
   built):** a durable `connect_keys` table (Option C) replacing the in-memory intent
