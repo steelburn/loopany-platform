@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary, TranscriptStep } from '../types'
-import { cronText, dotColor, dotLabel, dur, fmt, formatTranscript, tsShort, until } from '../lib/format'
+import { cronText, dotColor, dotLabel, dur, fmt, formatTranscript, isDone, tsShort, until } from '../lib/format'
 import { deleteJob, evolveJob, getJobDetail, getTranscript, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { ModalHead, ModalSection } from './Modal'
@@ -258,7 +258,7 @@ export function LoopDetailView({ id }: { id: string }) {
   const showEvolve = true
   const online = detail.machine.online
   const offlineHint = !online ? 'Machine offline — reconnect first' : undefined
-  const done = !s.enabled && !!runs.length && runs[0]!.status === 'resolved'
+  const done = isDone(s)
 
   const CONFIRM = {
     run: { q: 'Run one real cycle now?', note: 'Spawns the coding agent (claude).', cta: 'Run once', danger: false },

@@ -3,7 +3,7 @@ import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { Tooltip } from '@base-ui/react/tooltip'
 import { getAuthState, listJobs, listMyTeams, listTemplates } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
-import { authClient, useSession, signIn } from '../lib/auth-client'
+import { authClient, useSession } from '../lib/auth-client'
 import type { RunSummary, TemplateInfo } from '../types'
 import { isDone } from '../lib/format'
 import { LoopCard } from '../components/LoopCard'
@@ -12,6 +12,7 @@ import { MachinesModal } from '../components/MachinesModal'
 import { NotificationsModal } from '../components/NotificationsModal'
 import { ComposeModal } from '../components/ComposeModal'
 import { LoopLogo } from '../components/LoopLogo'
+import { SignIn } from '../components/SignIn'
 
 export const Route = createFileRoute('/')({
   ssr: false,
@@ -35,22 +36,6 @@ export const Route = createFileRoute('/')({
   },
   component: Gate,
 })
-
-function SignIn() {
-  return (
-    <div className="mx-auto mt-32 max-w-sm text-center">
-      <LoopLogo size={52} />
-      <h1 className="mt-4 font-mono text-2xl tracking-tight">LoopAny</h1>
-      <p className="mt-2 text-sm text-secondary">Sign in to manage your scheduled agent loops.</p>
-      <button
-        className="mt-6 rounded-md bg-primary px-4 py-2 text-sm text-paper"
-        onClick={() => void signIn.social({ provider: 'github', callbackURL: '/' })}
-      >
-        Continue with GitHub
-      </button>
-    </div>
-  )
-}
 
 /** Auth gate (only when a GitHub OAuth app is configured; otherwise open). Keeps
  *  Dashboard's hooks isolated so the gate never changes hook order. */
