@@ -37,7 +37,19 @@ Always report, even `nothing-new`, so the run is on record — whether the user 
 
 `loopany report` is one-way: it records the run and may message the user, but you cannot ask a question and get an answer back in this run. So if you are blocked and cannot finish (missing credentials, or an API or dependency is down or hanging), do not wait, retry, or poll it indefinitely. Make one bounded attempt, then report it with `loopany report --status new --message "<one line on what is blocking>"` and exit. If finishing needs a human decision, say so plainly in that message (and if you may control the schedule, `loopany pause` until they act).
 
-{{controlSection}}
+<!-- control:on -->
+## 4. Change your own schedule
+You can also change this loop's schedule — but only with a clear reason, recorded in the Timeline. Each command validates, applies immediately, and prints the result; read it to confirm.
+
+loopany reschedule --next <30m|2h|ISO>   one-shot: run again sooner/later, then resume cadence
+loopany set-cron "<cron expr>"           change the regular cadence permanently
+loopany pause | loopany resume              stop / restart this loop (pause when resolved/needs a human)
+loopany notify <always|auto|never>       change when this loop messages the user
+loopany show                             print the current schedule (confirm a change took)
+<!-- control:off -->
+## 4. Schedule
+This loop may not change its own schedule. Just do the task and `loopany report`.
+<!-- /control -->
 
 ## 5. Finish, then stop
 One pass, then exit. You'll be woken again on schedule. Do not poll, sleep, or wait.

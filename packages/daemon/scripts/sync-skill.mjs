@@ -4,7 +4,13 @@
  * `skill`). Run on `build` and `prepublishOnly` so the bundled copy can never
  * drift from the single source of truth at packages/server/src/skill/.
  *
- * The daemon installs this bundled dir locally via `npx skills` during `loopany up`
+ * SELECTIVE COPY — only the PUBLIC skill surface ships: SKILL.md (overview) + the
+ * references/ authoring trio (create/update/evolve). The INTERNAL run prompts under
+ * skill/run/ (exec-loop, edit) are server-side run-dispatch ONLY and must NEVER reach
+ * the public npm tarball or a user's installed ./.claude/skills/loopany/. A naive
+ * `cpSync(src, dst, {recursive})` would copy run/ too — so we whitelist instead.
+ *
+ * The daemon installs this bundled dir locally via `npx skills` during `loopany new`
  * (see src/skill-install.ts) — a LOCAL path source, so end users never need the
  * (private) platform repo.
  */
@@ -23,6 +29,18 @@ if (!fs.existsSync(path.join(src, "SKILL.md"))) {
   process.exit(0);
 }
 
+// The exact public surface — nothing else (notably NOT skill/run/) is bundled.
+const PUBLIC = ["SKILL.md", path.join("references", "create.md"), path.join("references", "update.md"), path.join("references", "evolve.md")];
+
 fs.rmSync(dst, { recursive: true, force: true });
-fs.cpSync(src, dst, { recursive: true });
-console.log(`sync-skill: ${src} -> ${dst}`);
+for (const rel of PUBLIC) {
+  const from = path.join(src, rel);
+  const to = path.join(dst, rel);
+  if (!fs.existsSync(from)) {
+    console.warn(`sync-skill: expected public skill file missing at ${from} — skipping it`);
+    continue;
+  }
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  fs.copyFileSync(from, to);
+}
+console.log(`sync-skill: ${src} -> ${dst} (public surface only: SKILL.md + references/)`);

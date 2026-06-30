@@ -56,8 +56,11 @@ LLM and executes no user code**.
   invariant holds: the server only reads its own run rows to decide. No UI change needed — runs
   already persist `phase:"error"` + `error`, which `JobDetailView`/run lists already render.
 - **The loopany agent skill (`packages/server/src/skill/`).** The loop-builder
-  knowledge is a real, installable agent skill — NOT one inline doc. Single source of
-  truth: `packages/server/src/skill/{SKILL.md,references/{create,update,evolve}.md}`.
+  knowledge is a real, installable agent skill — NOT one inline doc. **ALL prompt prose
+  now lives under `src/skill/`** (the unify that retired `scheduler/prompts/` entirely):
+  the PUBLIC authoring trio + overview in `skill/{SKILL.md,references/{create,update,evolve}.md}`,
+  and the INTERNAL run prompts in **`skill/run/{exec-loop.md,edit.md}`** (server-side
+  run-dispatch only — never served, never bundled; see the public-surface guardrail below).
   `SKILL.md` is the **overview** (frontmatter `name: loopany` + a strong `description`
   so Claude auto-triggers it) that routes to the three references: `create.md` (up →
   task file → config → `new`), `update.md` (`loopany edit` envelope vs. task file), and
@@ -66,23 +69,37 @@ LLM and executes no user code**.
   RUN prompt** — `gateway/prompt.ts` `import evolve from "../skill/references/evolve.md?raw"`
   (`buildEvolvePrompt()`), so the skill and run-dispatch read the SAME file and the
   evolution guidance can't drift (the unify that retired the old near-duplicate
-  `scheduler/prompts/evolve.md`). The `?raw` import bundles the text into the nitro
-  `.output` identically from `skill/references/` as it did from `scheduler/prompts/`
-  (no runtime `fs`/ENOENT). The OTHER run prompts stay under `scheduler/prompts/`:
-  `control-on`/`control-off`/`exec-loop` are run-only (no authoring twin), and `edit`
-  is **kept separate from `update.md` on purpose** — the edit RUN uses run-token verbs
-  on the current loop (`loopany set-cron`/`set-tz`/`set-ui`…, no id, via `/agent-api/loop`)
-  while `update.md` is the AUTHORING CLI (`loopany edit <id> --cron`, local daemon); the
-  two command surfaces serve different actors and can't merge into one doc without making
-  one audience wrong or breaking the run. **`/api/skill` serves the overview**
-  (`routes/api.skill.ts`, Vite `?raw`) — the bootstrap an agent follows on first capture;
-  **`/api/skill/references/<file>`** (`routes/api.skill.references.$.ts`, static map,
-  path-safe — only the 3 exact names resolve) serves the references over HTTP as a
-  **fallback** when the local install was skipped. Do NOT fork the content; edit the four
-  files. The skill is **bundled into the `@crewlet/loopany` npm package**: `package.json`
-  `files` lists `skill`, generated from the server's `src/skill/` by
-  `packages/daemon/scripts/sync-skill.mjs` on `build`/`prepublishOnly` (so it never
-  drifts); `packages/daemon/skill/` is **gitignored** (generated, like `routeTree.gen.ts`).
+  `scheduler/prompts/evolve.md`). The OTHER run prompts (`exec-loop`, `edit`) live under
+  **`skill/run/`** and are imported the same way (`import execLoop from "../skill/run/exec-loop.md?raw"`,
+  `import edit from "../skill/run/edit.md?raw"`). The `?raw` import bundles the text into the
+  nitro `.output` identically from `skill/run/` as it did from `scheduler/prompts/` (no runtime
+  `fs`/ENOENT). **The two control variants are MERGED into one source folded into `exec-loop.md`:**
+  a single delimited block `<!-- control:on -->…on text…<!-- control:off -->…off text…<!-- /control -->`
+  at the `## 4` slot; `prompt.ts` `resolveControl(text, allowControl)` keeps the applicable
+  variant (trimmed, verbatim) and drops the markers + the other variant, so the assembled
+  output is **byte-equivalent** to the former `{{controlSection}}` ← `control-on.md`/`control-off.md`
+  substitution. **Off-path terseness is preserved**: an `allowControl=false` loop's assembled
+  system prompt contains ONLY the terse "may not change your schedule" line — never the
+  `reschedule`/`set-cron`/`pause`/`resume`/`notify` verbs (the entire on-variant is dropped).
+  `exec-loop`/`edit` are run-only (no authoring twin), and `edit` is **kept separate from
+  `update.md` on purpose** — the edit RUN uses run-token verbs on the current loop (`loopany
+  set-cron`/`set-tz`/`set-ui`…, no id, via `/agent-api/loop`) while `update.md` is the AUTHORING
+  CLI (`loopany edit <id> --cron`, local daemon); the two command surfaces serve different
+  actors and can't merge into one doc without making one audience wrong or breaking the run.
+  **`/api/skill` serves the overview** (`routes/api.skill.ts`, Vite `?raw`) — the bootstrap an
+  agent follows on first capture; **`/api/skill/references/<file>`**
+  (`routes/api.skill.references.$.ts`, static map, path-safe — only the 3 exact names
+  `create`/`update`/`evolve` resolve; `exec-loop`/`edit` 404) serves the references over HTTP as
+  a **fallback** when the local install was skipped. **HARD GUARDRAIL — the internal run prompts
+  must NEVER reach the public surface:** the skill is **bundled into the `@crewlet/loopany` npm
+  package** (`package.json` `files` lists `skill`), but `packages/daemon/scripts/sync-skill.mjs`
+  is a **SELECTIVE copy** — it whitelists ONLY `SKILL.md` + `references/{create,update,evolve}.md`
+  (NOT a naive `cpSync(src, dst, {recursive})`, which would ship `skill/run/` into the public
+  tarball and into every user's installed `./.claude/skills/loopany/`). The bundle
+  (`packages/daemon/skill/`, **gitignored**, generated like `routeTree.gen.ts`) therefore ends up
+  with exactly `SKILL.md` + the references trio and nothing else (guarded by
+  `packages/daemon/src/sync-skill.test.ts`). Do NOT fork the content; edit the five files
+  (`SKILL.md`, the three references, and the two `run/` prompts).
 - **Loopany skill auto-install (`loopany new` → `npx skills`, into the loop workdir).**
   The install fires at **loop creation**, NOT `loopany up` (corrected in 0.4.0 — `up`
   may run from anywhere just to start the daemon, so it must not drop a skill into an

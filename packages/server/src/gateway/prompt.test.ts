@@ -67,8 +67,27 @@ test("exec system prompt fills every placeholder for an allowControl loop", () =
 test("exec system prompt swaps in the locked control section when allowControl is off", () => {
   const p = buildLoopSystemPrompt(loop({ allowControl: false }));
   expect(p).toMatch(/may not change its own schedule/i);
-  expect(p).not.toContain("loopany set-cron");
+  // Off-path terseness: the entire on-variant is dropped — the "Change your own
+  // schedule" heading and every verb UNIQUE to it are absent. (`loopany pause`/
+  // `loopany report` legitimately appear in the always-present §3 prose, so the
+  // negatives below are the on-block-only tokens.)
+  expect(p).not.toContain("## 4. Change your own schedule");
+  for (const verb of ["reschedule", "set-cron", "loopany resume", "loopany notify", "loopany show"]) {
+    expect(p).not.toContain(verb);
+  }
   expect(p).not.toMatch(/\{\{\w+\}\}/);
+  // The control merge leaves no delimiter markers in the assembled output.
+  expect(p).not.toContain("<!-- control");
+});
+
+test("exec system prompt (allowControl on) leaves no control delimiter markers", () => {
+  const p = buildLoopSystemPrompt(loop({ allowControl: true }));
+  expect(p).not.toContain("<!-- control");
+  expect(p).not.toContain("<!-- /control");
+  // The full on-variant verb list survives the merge.
+  for (const verb of ["reschedule", "set-cron", "loopany pause | loopany resume", "loopany notify", "loopany show"]) {
+    expect(p).toContain(verb);
+  }
 });
 
 test("exec system prompt lists declared metrics in the report line", () => {

@@ -56,6 +56,15 @@ describe('/api/skill/references/$', () => {
     expect(await res.json()).toEqual({ error: 'not found' })
   })
 
+  test('internal run prompts are NOT served (public surface = create/update/evolve only)', async () => {
+    // exec-loop.md / edit.md live under skill/run/ — internal run-dispatch only. They
+    // must never leak through the public references route (or the npm bundle).
+    for (const name of ['exec-loop.md', 'edit.md', 'control-on.md', 'control-off.md']) {
+      const res = await call(`/api/skill/references/${name}`)
+      expect(res.status).toBe(404)
+    }
+  })
+
   test('path traversal is refused (not in the static map)', async () => {
     for (const p of [
       '/api/skill/references/..%2f..%2fpackage.json',
