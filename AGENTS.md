@@ -90,8 +90,9 @@ LLM and executes no user code**.
 - **Artifact live-sync Phase 2 (web Files view) + Phase 3 (per-run diff).** Read-only,
   built on Phase 1. **Phase 2:** lazy-by-id server fns `getArtifacts`/`getArtifact`
   (`server/loopApi.ts`) → pure helpers in `server/artifactFiles.ts` (read bytes via
-  `gateway.readBlob`, decode text; binary/oversize → download marker) → `FilesView.tsx`
-  "Files" section in `JobDetailView`. Binary downloads stream from the
+  `gateway.readBlob`, decode text; binary/oversize → download marker) → the unified
+  `LoopFilesPanel.tsx` in `LoopDetailView` (the loop page; see the Unified Files panel
+  bullet below). Binary downloads stream from the
   session-authed, path-safe route `routes/api.artifact.$loopId.$.ts` (splat path;
   team-scoped via the shared `auth.loopInScope` predicate that `ownedLoop` also uses).
   **Phase 3:** `run_snapshots` table (migration `0012`, manifest = path→{hash,size,
@@ -99,7 +100,7 @@ LLM and executes no user code**.
   finalize (`store.buildLoopManifest`); `getRunDiff({runId})` lazily diffs run N vs the
   prior run (`store.prevRunSnapshot`) — unified text diff via the pure-string `diff`
   (jsdiff) lib in `server/runDiff.ts`, size-delta marker for binary/oversize — rendered
-  in `RunView`'s "Changes (N)" section. The daemon flushes a final run-tagged sync
+  in `RunDetailView`'s "Changes (N)" section. The daemon flushes a final run-tagged sync
   before reporting (`watcher.flushLoop` + `runner` `reportRun`) so the snapshot captures
   end-state. Old runs with no snapshot degrade to a calm fallback; zero-exec invariant
   holds (server only stores/reads bytes + computes pure-string diffs).
@@ -120,7 +121,7 @@ LLM and executes no user code**.
   carries it. UI: `ComposeModal` has an agent selector — Codex is **selectable** but
   messaged "recorded — runs via Claude for now"; the snippet carries an `agent:` line;
   `SKILL.md` tells the agent to self-declare via `--agent`. Execution-path copy that
-  truly means Claude (run-now, edit-via-Claude-Code in `JobDetailView`) stays "Claude"
+  truly means Claude (run-now, edit-via-Claude-Code in `LoopDetailView`) stays "Claude"
   on purpose — that IS what runs. Daemon now has vitest (`create.test.ts`) for the
   detector/precedence; server tests cover createLoop persistence + adapter mapping.
 - **CI/CD (`.github/workflows/`).** Two GitHub Actions workflows, deliberately split by
@@ -199,6 +200,42 @@ LLM and executes no user code**.
   map so a snippet pasted after a server restart still files correctly; and the
   team-member **invitation UI** — without it only superadmins can be multi-team, so
   this path is admin-only in practice today.
+- **Loop detail is a PAGE, not a modal (`/loops/$loopId`).** The old dashboard
+  modal (`JobDetailView` + `RunView` inside `Modal`) was retired for dedicated
+  routes. `routes/loops.$loopId.tsx` → `components/LoopDetailView.tsx` (the loop
+  page body: a header card with name/cron/next/agent/machine-status/id + the action
+  toolbar [Run once / Edit / ··· menu], an optional agent-authored `LoopView`
+  dashboard, then a 2-col `[1.55fr_1fr]` grid of the **unified Files panel** and the
+  **Runs** section). The dashboard (`routes/index.tsx`) + `LoopCard` now **navigate**
+  (`useNavigate`) instead of `setView` — no more `Modal` for detail. The page owns
+  its own `getJobDetail` fetch + self-poll (3s while a run is live, else 8s; ssr:false
+  so the session cookie rides along), same cadence as the old modal. The edit paths
+  (hand-to-Claude-Code via `requestEdit`; manual `LoopForm` fallback) survive as
+  in-page mode takeovers. Reconnect opens `MachinesModal` rendered on the page itself.
+- **Unified Files panel (`components/LoopFilesPanel.tsx`).** Merges the former
+  separate task-file box + `FilesView` (both DELETED) into ONE master-detail: a file
+  list (task file pinned first with a `TASK` chip, then synced artifacts path-sorted)
+  drives a content viewer; the **task file is selected by default**. Reuses the Phase
+  2 server fns — `getArtifacts` (self-polls by loopId) for the list, `getArtifact`
+  for text bodies; markdown (task file + `*.md`) renders via `TaskFileView` (now takes
+  a `bare` prop = no own inset/scroll, host owns the surface), other text in a mono
+  `<pre>`, binary/oversize → the existing `/api/artifact/$loopId/$` download route.
+  An artifact whose path equals the task file is de-duped (one canonical entry).
+- **Run detail is its own route (`/loops/$loopId/runs/$runId`).** `RunView.tsx` now
+  exports **`RunDetailView`** (page-oriented; the old modal `RunView` is gone). The
+  route file is `loops.$loopId_.runs.$runId.tsx` — the trailing `_` on the `$loopId`
+  segment **un-nests** it from the loop page (standalone full page, deep-linkable +
+  browser-back, not nested in an `<Outlet/>`). It resolves the run from
+  `getJobDetail(loopId).runs` (the latest ~100); a run older than that window is
+  located by paging backward with the existing `loadOlderRuns` cursor fn (bounded
+  by `MAX_OLDER_PAGES`) so a run clickable in the `Timeline` strip never dead-ends
+  — still NO new backend. Only if the backward walk is exhausted does it show the
+  calm "no longer available" fallback. It self-polls while running (a SILENT poll,
+  separate from the err-setting initial load, so a transient blip can't brick the
+  page), refetches the `getTranscript` trace when the run settles (keyed on
+  `run.running`), and renders the Phase-3 `getRunDiff` "Changes". Run rows in the
+  loop page's Runs list + the `Timeline` strip `onPickRun` both `<Link>`/navigate
+  here. Screenshots of the four states live in `docs/screenshots/loop-detail-page/`.
 
 ## Commands
 

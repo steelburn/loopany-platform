@@ -1,25 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { Tooltip } from '@base-ui/react/tooltip'
 import { getAuthState, listJobs, listMyTeams, listTemplates } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
-import { authClient, useSession, signIn } from '../lib/auth-client'
+import { authClient, useSession } from '../lib/auth-client'
 import type { RunSummary, TemplateInfo } from '../types'
 import { isDone } from '../lib/format'
 import { LoopCard } from '../components/LoopCard'
 import { TeamSwitcher } from '../components/TeamSwitcher'
 import { MachinesModal } from '../components/MachinesModal'
 import { NotificationsModal } from '../components/NotificationsModal'
-import { Modal } from '../components/Modal'
-import { JobDetailView } from '../components/JobDetailView'
-import { RunView } from '../components/RunView'
 import { ComposeModal } from '../components/ComposeModal'
 import { LoopLogo } from '../components/LoopLogo'
-
-type View =
-  | { kind: 'job'; id: string }
-  | { kind: 'run'; jobId: string; jobName: string; run: RunSummary }
-  | null
+import { SignIn } from '../components/SignIn'
 
 export const Route = createFileRoute('/')({
   ssr: false,
@@ -44,22 +37,6 @@ export const Route = createFileRoute('/')({
   component: Gate,
 })
 
-function SignIn() {
-  return (
-    <div className="mx-auto mt-32 max-w-sm text-center">
-      <LoopLogo size={52} />
-      <h1 className="mt-4 font-mono text-2xl tracking-tight">LoopAny</h1>
-      <p className="mt-2 text-sm text-secondary">Sign in to manage your scheduled agent loops.</p>
-      <button
-        className="mt-6 rounded-md bg-primary px-4 py-2 text-sm text-paper"
-        onClick={() => void signIn.social({ provider: 'github', callbackURL: '/' })}
-      >
-        Continue with GitHub
-      </button>
-    </div>
-  )
-}
-
 /** Auth gate (only when a GitHub OAuth app is configured; otherwise open). Keeps
  *  Dashboard's hooks isolated so the gate never changes hook order. */
 function Gate() {
@@ -73,7 +50,7 @@ function Dashboard() {
   const { jobs = [], templates = [], machines = [], teams } = Route.useLoaderData() ?? {}
   const online = machines.filter((m) => m.online).length
   const router = useRouter()
-  const [view, setView] = useState<View>(null)
+  const navigate = useNavigate()
   const [compose, setCompose] = useState<{ open: boolean; template: TemplateInfo | null }>({
     open: false,
     template: null,
@@ -81,12 +58,12 @@ function Dashboard() {
   const [machinesOpen, setMachinesOpen] = useState(false)
   const [notifyOpen, setNotifyOpen] = useState(false)
 
-  // Poll the loader, but never while a modal is open (avoid disrupting an
-  // edit/compose in progress). A ref keeps the interval reading current state.
+  // Poll the loader, but never while a modal is open (avoid disrupting a
+  // compose in progress). A ref keeps the interval reading current state.
   // Speed up to 3s while any loop is executing so its run block + Running badge
   // surface (and settle into a finished block) without a manual refresh.
   const openRef = useRef(false)
-  openRef.current = view != null || compose.open || machinesOpen || notifyOpen
+  openRef.current = compose.open || machinesOpen || notifyOpen
   const anyRunning = jobs.some((j) => j.running)
   useEffect(() => {
     const t = setInterval(
@@ -103,10 +80,10 @@ function Dashboard() {
   const active = jobs.filter((j) => !isDone(j))
   const activeOn = active.filter((j) => j.enabled).length
 
-  const cardProps = (jobName: string) => ({
-    onOpen: (id: string) => setView({ kind: 'job', id }),
+  const cardProps = () => ({
+    onOpen: (id: string) => void navigate({ to: '/loops/$loopId', params: { loopId: id } }),
     onPickRun: (jobId: string, run: RunSummary) =>
-      setView({ kind: 'run', jobId, jobName, run }),
+      void navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: jobId, runId: run.id } }),
   })
 
   return (
@@ -177,7 +154,7 @@ function Dashboard() {
         </div>
 
         {active.length ? (
-          active.map((j) => <LoopCard key={j.id} job={j} {...cardProps(j.name)} />)
+          active.map((j) => <LoopCard key={j.id} job={j} {...cardProps()} />)
         ) : (
           <div className="py-16 text-center">
             <div className="text-[15px] text-secondary">
@@ -202,39 +179,11 @@ function Dashboard() {
               </span>
             </div>
             {done.map((j) => (
-              <LoopCard key={j.id} job={j} {...cardProps(j.name)} />
+              <LoopCard key={j.id} job={j} {...cardProps()} />
             ))}
           </>
         )}
       </main>
-
-      <Modal
-        open={view != null}
-        onClose={() => setView(null)}
-        variant={view?.kind === 'job' && jobs.find((j) => j.id === view.id)?.hasUi ? 'wide' : 'detail'}
-      >
-        {view?.kind === 'job' && (
-          <JobDetailView
-            id={view.id}
-            onChanged={refresh}
-            onClose={() => setView(null)}
-            onReconnect={() => {
-              setView(null)
-              setMachinesOpen(true)
-            }}
-            onPickRun={(jobName, run) => setView({ kind: 'run', jobId: view.id, jobName, run })}
-          />
-        )}
-        {view?.kind === 'run' && (
-          <RunView
-            jobName={view.jobName}
-            run={view.run}
-            onOpenLoop={() => setView({ kind: 'job', id: view.jobId })}
-            onChanged={refresh}
-            onClose={() => setView(null)}
-          />
-        )}
-      </Modal>
 
       <ComposeModal
         open={compose.open}
