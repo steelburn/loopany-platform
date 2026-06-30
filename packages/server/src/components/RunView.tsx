@@ -315,7 +315,19 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
     await load()
   }
 
-  if (err) return <div className="font-mono text-[13px] text-accent">[ ERROR ] {err}</div>
+  if (err)
+    return (
+      <div className="font-mono text-[13px] text-accent">
+        [ ERROR ] {err}
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="ml-3 cursor-pointer border-none bg-transparent p-0 text-[12px] tracking-[0.08em] text-interactive underline underline-offset-2 hover:text-display"
+        >
+          Retry
+        </button>
+      </div>
+    )
   // Still loading while the loop detail is in flight, or while the backward
   // search for an older run hasn't settled yet.
   if (!detail || (!run && !searchDone))
