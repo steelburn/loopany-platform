@@ -10,18 +10,22 @@
  * a server and token are available. Nothing is fabricated: an unreachable server
  * or absent pidfile simply degrades to "unknown / can't tell locally".
  *
- * Every external touch (pidfile read, liveness probe, kill, server fetch, output)
- * is an injectable seam so the tests need no real process or network.
+ * Every external touch (pidfile read, liveness probe, start-time lookup, kill,
+ * server fetch, output) is an injectable seam so the tests need no real process
+ * or network.
  */
 import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
-import { PID_FILE, readPidFile, clearPidFile, isAlive } from "./pidfile.js";
+import { PID_FILE, readPidFile, clearPidFile, isAlive, processStartTime, type PidRecord } from "./pidfile.js";
 
 type Online = { online: boolean; name: string | null };
 
 /** Best-effort server view of this machine (same endpoint `loopany up` waits on). */
 async function fetchOnlineDefault(server: string, token: string): Promise<Online | undefined> {
   try {
-    const res = await fetch(`${server}/api/machine/status`, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(`${server}/api/machine/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(3000),
+    });
     if (!res.ok) return undefined;
     return (await res.json()) as Online;
   } catch {
@@ -30,8 +34,9 @@ async function fetchOnlineDefault(server: string, token: string): Promise<Online
 }
 
 export type ControlDeps = {
-  readPid?: () => number | undefined;
+  readPid?: () => PidRecord | undefined;
   alive?: (pid: number) => boolean;
+  startTime?: (pid: number) => string | undefined;
   clearPid?: () => void;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   fetchOnline?: (server: string, token: string) => Promise<Online | undefined>;
@@ -49,6 +54,7 @@ function deps(d: ControlDeps): Seams {
   return {
     readPid: d.readPid ?? readPidFile,
     alive: d.alive ?? isAlive,
+    startTime: d.startTime ?? processStartTime,
     clearPid: d.clearPid ?? clearPidFile,
     kill: d.kill ?? ((pid, signal) => process.kill(pid, signal)),
     fetchOnline: d.fetchOnline ?? fetchOnlineDefault,
@@ -58,16 +64,30 @@ function deps(d: ControlDeps): Seams {
 }
 
 /**
- * The pid of a daemon that is ACTUALLY alive, or undefined. A pidfile left behind
- * by a crashed daemon (pid no longer alive) is cleared as a side effect so we
- * don't report a ghost — and so a fresh `up` isn't confused by stale state.
+ * The pid of a daemon that is ACTUALLY ours and alive, or undefined. A pid is
+ * "our daemon" iff it is alive AND (no recorded start-time, or the live process's
+ * start-time still equals the one we recorded) — so a pid REUSED by an unrelated
+ * process after an unclean crash (which left the pidfile behind) is NOT mistaken
+ * for the daemon and never signaled. A dead pid OR a start-time mismatch is
+ * cleared as a side effect so we don't report a ghost and a fresh `up` isn't
+ * confused by stale state. When the start-time can't be read at check time we
+ * degrade to alive-only (best-effort, never crash).
  */
 function runningPid(d: Seams): number | undefined {
-  const pid = d.readPid();
-  if (pid === undefined) return undefined;
-  if (d.alive(pid)) return pid;
-  d.clearPid();
-  return undefined;
+  const rec = d.readPid();
+  if (rec === undefined) return undefined;
+  if (!d.alive(rec.pid)) {
+    d.clearPid();
+    return undefined;
+  }
+  if (rec.startTime !== undefined) {
+    const live = d.startTime(rec.pid);
+    if (live !== undefined && live !== rec.startTime) {
+      d.clearPid();
+      return undefined;
+    }
+  }
+  return rec.pid;
 }
 
 /** Show a device token as a short non-secret fingerprint, never in full. */
