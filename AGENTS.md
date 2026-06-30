@@ -111,6 +111,43 @@ LLM and executes no user code**.
   **Provenance is wired but OFF** (commented `id-token: write` + a note on the publish line):
   the repo is private now and provenance requires a public source repo — flip both when it
   goes public. These workflows only run on GitHub (push/tag), not in the local pipeline.
+- **Per-team connect-key → loop team (multi-team capture).** A user can belong to
+  multiple teams; a loop captured from team B's dashboard must land in team B even
+  though the user has ONE machine/daemon. A loop's team is decoupled from the
+  machine's single `teamId`: the **connect-key/claim carries the team**, not the
+  machine. `mintClaim` (`server/loopApi.ts`) reads the VALIDATED active team from
+  `requestScope()` and binds it to the freshly-minted connect-key via
+  `rememberClaimIntent(key,{userId,teamId})` (`gateway/tokens.ts`, in-memory map
+  alongside `deviceOwners`/`claimResults`; 24h TTL). It **fails safe in the admin
+  "All teams" view** — returns `{error}` rather than minting a key that would fall
+  back to the personal team (`ComposeModal` surfaces it). `createLoop`
+  (`gateway/index.ts`) resolves `loop.teamId` from `readClaimIntent(body.claim)`:
+  no intent ⇒ fall back to the machine's home team (back-compat); when the intent
+  team **differs** from the home team it's a CROSS-TEAM create, gated **fail-closed**
+  (never silently mis-file — that was the original bug): `machine.userId ===
+  intent.userId` (bind claim to its minter) **AND** re-validate authorization now —
+  `store.isTeamMember(team,userId)` OR superadmin on an existing team (mirrors
+  `requestScope`). The team value is server-minted, never client input. The "intent
+  team === home team" short-circuit means **open mode** (single `team-shared`, no
+  member rows) skips the checks and is unaffected. Superadmin re-check uses the
+  standalone pure `src/superadmin.ts` (`isSuperAdmin`, re-exported by `auth.ts`) so
+  the framework-agnostic gateway never imports the Better-Auth-init module;
+  `store.userEmail(userId)` looks up the email. **Machine is membership-scoped, not
+  single-team:** `store.listMachinesForTeam(teamId)` (owner↔team_members join) makes
+  one machine visible in every team its owner belongs to; `machineFns` listing + web
+  `createJob` machine pick/validation use it (a machine is usable if its owner is the
+  current user or a member of the active team). `machine.teamId` is RETAINED as the
+  home/default team (no-claim fallback); on self-register (`poll`) a machine's home
+  team is ALWAYS the owner's personal team - NOT seeded from the connect-key intent.
+  Keeping home = personal team means the fallback can never be a shared team the
+  owner is merely a (possibly later-revoked) member of; a loop's actual team comes
+  from the validated claim intent at `createLoop` time, never from this home team. The daemon is
+  **unchanged** — the per-team key already travels as `claim` in `loopany new`, and
+  `loopany up` keeps the single stored device token. **Phase-3 follow-ups (NOT
+  built):** a durable `connect_keys` table (Option C) replacing the in-memory intent
+  map so a snippet pasted after a server restart still files correctly; and the
+  team-member **invitation UI** — without it only superadmins can be multi-team, so
+  this path is admin-only in practice today.
 
 ## Commands
 
