@@ -125,8 +125,21 @@
   margin: 0.6em 0;
 }
 .taskmd hr { border: 0; border-top: 1px solid var(--color-hairline); margin: 1em 0; }
-.taskmd table { width: 100%; border-collapse: collapse; margin: 0.6em 0; }
-.taskmd th, .taskmd td { border: 1px solid var(--color-hairline); padding: 4px 8px; text-align: left; }
+/*
+ * A wide table scrolls WITHIN its own pane instead of stretching the panel (and
+ * with it the whole page) — the GitHub-markdown pattern: a max-content block
+ * capped at 100% of the container, scrolling horizontally past that. Without this
+ * a multi-column table in a synced artifact shoves the runs rail off-screen.
+ */
+.taskmd table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.6em 0;
+}
+.taskmd th, .taskmd td { border: 1px solid var(--color-hairline); padding: 4px 8px; text-align: left; white-space: nowrap; }
 .taskmd img { max-width: 100%; }
 
 /*

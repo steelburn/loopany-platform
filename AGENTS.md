@@ -237,13 +237,29 @@ LLM and executes no user code**.
   routes. `routes/loops.$loopId.tsx` → `components/LoopDetailView.tsx` (the loop
   page body: a header card with name/cron/next/agent/machine-status/id + the action
   toolbar [Run once / Edit / ··· menu], an optional agent-authored `LoopView`
-  dashboard, then a 2-col `[1.55fr_1fr]` grid of the **unified Files panel** and the
-  **Runs** section). The dashboard (`routes/index.tsx`) + `LoopCard` now **navigate**
+  dashboard, then a 2-col grid of the **unified Files panel** and the **Runs**
+  section). The dashboard (`routes/index.tsx`) + `LoopCard` now **navigate**
   (`useNavigate`) instead of `setView` — no more `Modal` for detail. The page owns
   its own `getJobDetail` fetch + self-poll (3s while a run is live, else 8s; ssr:false
   so the session cookie rides along), same cadence as the old modal. The edit paths
   (hand-to-Claude-Code via `requestEdit`; manual `LoopForm` fallback) survive as
   in-page mode takeovers. Reconnect opens `MachinesModal` rendered on the page itself.
+  **`loops.agent` is surfaced as a quiet chip** beside the title status pills (not the
+  meta row). **Edit modes use a bare-page `EditHead`, NEVER `ModalHead`:** `ModalHead`
+  renders Base UI `Dialog.Title`/`Dialog.Close`, which call `useDialogRootContext()`
+  and throw (`Cannot destructure property 'store' of 'useDialogRootContext(...)'`)
+  with no `Dialog.Root` ancestor — the original modal flow wrapped them in `<Modal>`,
+  the page does not, so any `Dialog.*` part rendered directly on the page crashes the
+  view on first click (`loopDetailEdit.regression.test.ts` guards this). **Layout: the
+  content viewer is the star** — the main grid is `lg:grid-cols-[minmax(0,1fr)_minmax(
+  300px,360px)]` (files panel bulk, runs a capped rail) inside a `max-w-[1360px]` shell
+  (run page `max-w-[1040px]`). The hard rule against page-level horizontal scroll:
+  `min-w-0` on every grid/flex child + contain wide content in its own pane — the
+  agent-authored dashboard (`LoopView`) is wrapped in `overflow-x-auto` (a too-wide
+  card row scrolls inside the dashboard box, a responsive auto-fit grid wraps), and
+  `.taskmd table` is a `display:block; width:max-content; max-width:100%; overflow-x:
+  auto` block so a wide markdown table scrolls inside the viewer, never widening the
+  page / shoving the runs rail off-screen.
 - **Unified Files panel (`components/LoopFilesPanel.tsx`).** Merges the former
   separate task-file box + `FilesView` (both DELETED) into ONE master-detail: a file
   list (task file pinned first with a `TASK` chip, then synced artifacts path-sorted)
@@ -252,7 +268,18 @@ LLM and executes no user code**.
   for text bodies; markdown (task file + `*.md`) renders via `TaskFileView` (now takes
   a `bare` prop = no own inset/scroll, host owns the surface), other text in a mono
   `<pre>`, binary/oversize → the existing `/api/artifact/$loopId/$` download route.
-  An artifact whose path equals the task file is de-duped (one canonical entry).
+  **The task file IS the loop folder's README, so it appears EXACTLY ONCE** — the
+  list/dedup logic is the framework-free `lib/fileEntries.ts` (`buildFileEntries` +
+  `isTaskPath` + `isTaskEntry`, unit-tested in `fileEntries.test.ts`). Once the README
+  has synced it arrives as a normal artifact, so we **badge that artifact row as the
+  task** (default-selected, `TASK` chip) and drop the duplicate; only before the first
+  sync (no matching artifact) do we emit a single SYNTHETIC task entry from the loop
+  record. The match is robust — `job.taskFile` is usually an ABSOLUTE machine path
+  while the artifact path is loop-relative, so `isTaskPath` compares on a normalized
+  path (equal / whole-segment suffix / basename), NOT the old brittle `f.path ===
+  taskFile` that silently failed and rendered the README twice. The task row always
+  renders its body from the loop record's `taskFileContent` (authoritative, always
+  present), not the artifact blob fetch — robust to a missing/cold blob.
 - **Run detail is its own route (`/loops/$loopId/runs/$runId`).** `RunView.tsx` now
   exports **`RunDetailView`** (page-oriented; the old modal `RunView` is gone). The
   route file is `loops.$loopId_.runs.$runId.tsx` — the trailing `_` on the `$loopId`
