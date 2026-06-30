@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactContent, ArtifactSummary } from '../types'
 import { fmt, humanBytes } from '../lib/format'
+import { buildFileEntries, isTaskEntry } from '../lib/fileEntries'
 import { getArtifact, getArtifacts } from '../server/loopApi'
 import { downloadHref } from './ArtifactFileRow'
 import { TaskFileView } from './TaskFileView'
@@ -14,11 +15,6 @@ import { TaskFileView } from './TaskFileView'
  * oversize files offer the download route. The artifact list is fetched lazily by
  * loopId and self-polls so files appear as the loop writes them (Phase 1-2 reuse).
  */
-
-/** A row in the unified list: the synthetic task file, or one synced artifact. */
-type Entry =
-  | { kind: 'task'; path: string }
-  | { kind: 'artifact'; path: string; file: ArtifactSummary }
 
 const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path)
 const basename = (path: string) => path.split('/').pop() || path
@@ -71,18 +67,10 @@ export function LoopFilesPanel({
     return () => clearInterval(t)
   }, [running, refresh])
 
-  // Build the unified entry list: task file first, then artifacts (path-sorted,
-  // already so from the server). The task file's own row is dropped from the
-  // artifact list if it also synced as a file — one canonical entry, not two.
-  const entries = useMemo<Entry[]>(() => {
-    const out: Entry[] = []
-    if (taskFile) out.push({ kind: 'task', path: taskFile })
-    for (const f of artifacts ?? []) {
-      if (taskFile && f.path === taskFile) continue
-      out.push({ kind: 'artifact', path: f.path, file: f })
-    }
-    return out
-  }, [taskFile, artifacts])
+  // Build the unified entry list (task FIRST, then path-sorted artifacts) — see
+  // `buildFileEntries`: the task file IS the loop folder's README, so it appears
+  // exactly once (badge the synced artifact, or a synthetic entry pre-first-sync).
+  const entries = useMemo(() => buildFileEntries(taskFile, artifacts ?? []), [taskFile, artifacts])
 
   // Default selection: the task file, else the first artifact. Only auto-pick
   // when nothing is selected (or the prior pick vanished) so a manual choice and
@@ -94,9 +82,14 @@ export function LoopFilesPanel({
   }, [entries, selected])
 
   const active = entries.find((e) => e.path === selected) ?? null
+  // The task row — synthetic OR a synced artifact badged as the task — always
+  // renders from the loop record's `taskFileContent` (authoritative + always
+  // present), not the artifact's own blob fetch. Same file, but this is robust to
+  // a missing blob and avoids a redundant round-trip.
+  const activeIsTask = isTaskEntry(active)
 
   return (
-    <section>
+    <section className="min-w-0">
       <div className="mb-2.5 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">
         <h2 className="font-mono text-[11px] tracking-[0.08em] text-secondary">
           files{artifacts ? ` (${entries.length})` : ''}
@@ -115,6 +108,7 @@ export function LoopFilesPanel({
             <ul className="py-1.5">
               {entries.map((e) => {
                 const on = e.path === selected
+                const isTask = isTaskEntry(e)
                 return (
                   <li key={e.path}>
                     <button
@@ -139,7 +133,7 @@ export function LoopFilesPanel({
                           </span>
                         )}
                       </span>
-                      {e.kind === 'task' ? (
+                      {isTask ? (
                         <span className="shrink-0 rounded-sm border border-wire px-1 font-mono text-[9px] tracking-[0.06em] text-secondary">
                           TASK
                         </span>
@@ -157,7 +151,7 @@ export function LoopFilesPanel({
 
           {/* content viewer */}
           <div className="min-w-0 overflow-y-auto">
-            {active?.kind === 'task' ? (
+            {activeIsTask && active ? (
               <TaskEntryView path={active.path} content={taskFileContent} syncedAt={taskFileSyncedAt} />
             ) : active?.kind === 'artifact' ? (
               <ArtifactEntryView loopId={loopId} file={active.file} />

@@ -5,7 +5,7 @@ import type { ChannelSummary, CodingAgent, JobDetail, RunSummary, TranscriptStep
 import { cronText, dotColor, dotLabel, dur, fmt, formatTranscript, isDone, tsShort, until } from '../lib/format'
 import { deleteJob, evolveJob, getJobDetail, getTranscript, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
-import { ModalHead, ModalSection } from './Modal'
+import { ModalSection } from './Modal'
 import { LoopView } from './LoopView'
 import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
@@ -402,7 +402,7 @@ export function LoopDetailView({ id }: { id: string }) {
     const traceText = editTrace?.length ? formatTranscript(editTrace) : ''
     return (
       <Shell back={backLink}>
-        <ModalHead title={`Edit · ${s.name}`} />
+        <EditHead name={s.name} />
         <button
           type="button"
           onClick={exitEdit}
@@ -514,7 +514,7 @@ export function LoopDetailView({ id }: { id: string }) {
   if (editing) {
     return (
       <Shell back={backLink}>
-        <ModalHead title={`Edit · ${s.name}`} />
+        <EditHead name={s.name} />
         <button
           type="button"
           onClick={() => setEditing(false)}
@@ -565,6 +565,14 @@ export function LoopDetailView({ id }: { id: string }) {
                   Paused
                 </span>
               ) : null}
+              {/* Which coding agent this loop is recorded against (loops.agent) —
+                  a quiet, unobtrusive chip, not a status pill. */}
+              <span
+                className="inline-flex h-5 items-center rounded border border-hairline px-2 font-mono text-[10.5px] tracking-[0.06em] text-secondary"
+                title="Recorded coding agent"
+              >
+                {agentLabel}
+              </span>
             </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[12.5px] tracking-[0.02em] text-secondary">
               <span className="text-primary" title={job.cron}>
@@ -573,8 +581,6 @@ export function LoopDetailView({ id }: { id: string }) {
               {metaDot}
               <span>next {fmt(s.nextRun)}</span>
               {s.nextRun && s.enabled && !done && <span className="text-disabled">({until(s.nextRun)})</span>}
-              {metaDot}
-              <span title="Recorded coding agent">{agentLabel}</span>
               {metaDot}
               <span className="inline-flex items-center gap-1.5" title={online ? 'Machine online' : 'Machine offline'}>
                 <span className={`size-1.5 rounded-full ${online ? 'bg-[color:var(--color-ok,#16a34a)]' : 'bg-disabled'}`} />
@@ -596,14 +602,23 @@ export function LoopDetailView({ id }: { id: string }) {
 
       {/* agent-authored dashboard (when present) */}
       {hasUi && (
-        <section className="mt-6 rounded-2xl border border-wire bg-surface px-6 py-5">
+        <section className="mt-6 min-w-0 rounded-2xl border border-wire bg-surface px-6 py-5">
           <div className="mb-3.5 border-b border-hairline pb-1.5 font-mono text-[11px] tracking-[0.08em] text-secondary">dashboard</div>
-          <LoopView html={job.ui!} runs={runs} />
+          {/* Agent-authored HTML — contain it so an over-wide card row / chart
+              scrolls inside the dashboard box rather than widening the whole page;
+              a responsive (auto-fit) card grid then wraps within this bounded width. */}
+          <div className="min-w-0 overflow-x-auto">
+            <LoopView html={job.ui!} runs={runs} />
+          </div>
         </section>
       )}
 
-      {/* files (unified) + runs */}
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1.55fr_1fr]">
+      {/* files (unified) + runs — the files panel (its content viewer is the star)
+          takes the bulk of the width via a shrinkable minmax(0,1fr) track; runs is
+          a capped medium rail that's always visible. `minmax(0,…)` + each child's
+          own `min-w-0` keep a wide artifact (or table) from forcing PAGE scroll —
+          it scrolls inside its own pane instead. Collapses to one column < lg. */}
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
         <LoopFilesPanel
           loopId={id}
           taskFile={job.taskFile}
@@ -633,10 +648,20 @@ export function LoopDetailView({ id }: { id: string }) {
   )
 }
 
+/**
+ * Edit-mode page heading. The edit views are in-page mode takeovers (NOT modals),
+ * so this is a plain heading — NOT `ModalHead`, whose Base UI `Dialog.Title`/
+ * `Dialog.Close` require a `Dialog.Root` ancestor and throw ("Cannot destructure
+ * property 'store' of 'useDialogRootContext(...)'") when rendered on a bare page.
+ */
+function EditHead({ name }: { name: string }) {
+  return <h1 className="text-[22px] font-medium tracking-tight text-display">Edit · {name}</h1>
+}
+
 /** The page shell — centered column, a back affordance, consistent padding. */
 function Shell({ back, children }: { back: React.ReactNode; children: React.ReactNode }) {
   return (
-    <main className="mx-auto max-w-[1180px] px-8 pb-24 pt-10">
+    <main className="mx-auto max-w-[1360px] px-8 pb-24 pt-10">
       <div className="mb-5">{back}</div>
       {children}
     </main>
