@@ -159,19 +159,14 @@ export class MachineGateway {
       // Owner remembered at mint time (AI-First claim) when the gate is on;
       // "shared" otherwise (open mode, or a token minted out-of-band).
       const owner = getDeviceOwner(machineId) ?? "shared";
-      // Home/default team for this machine (the no-claim fallback for loops created
-      // on it later). A brand-new machine whose FIRST connect-key was minted under a
-      // specific team adopts that team as its home; otherwise the owner's personal
-      // team. The minted team already exists (created in the web session) — guard on
-      // getTeam so we never resurrect/rename it; only the personal team needs ensuring.
-      const intent = readClaimIntent(deviceToken);
-      let teamId: string;
-      if (intent && intent.userId === owner && store.getTeam(intent.teamId)) {
-        teamId = intent.teamId;
-      } else {
-        teamId = store.teamIdForUser(owner);
-        store.ensureTeam(teamId, owner === "shared" ? "Shared Workspace" : "Personal Team", owner === "shared" ? null : owner);
-      }
+      // Home/default team for this machine: ALWAYS the owner's personal team (the
+      // no-claim fallback for loops created on it later). A loop's actual team comes
+      // from the validated claim intent at createLoop time, never from this home
+      // team — so cross-team capture still lands in team B. Keeping home = personal
+      // team preserves the safe invariant that a machine's fallback can never be a
+      // shared team the owner is merely a (possibly later-revoked) member of.
+      const teamId = store.teamIdForUser(owner);
+      store.ensureTeam(teamId, owner === "shared" ? "Shared Workspace" : "Personal Team", owner === "shared" ? null : owner);
       machine = store.createMachine({
         id: machineId,
         userId: owner,
