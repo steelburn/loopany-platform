@@ -250,7 +250,7 @@ Reclaim: machine took the delivery but no report within timeoutMs+grace (default
 - cross Slack-workspace multi-tenancy (per-user Slack OAuth).
 - codex backend; persistent claude sessions / `--resume`; machine-offline inbox queueing + catch-up; multi-machine fallback.
 - daemon keep-alive (`loopany install` writes launchd/systemd).
-- web **Files view** for live-synced loop artifacts (the daemon→server sync foundation already landed, see **D10**); per-run artifact diff (`run_snapshots`, Phase 3).
+- ~~web **Files view** for live-synced loop artifacts~~ + ~~per-run artifact diff (`run_snapshots`, Phase 3)~~ (**both landed, see D11** - read-only, built on the D10 sync foundation).
 
 ---
 
@@ -353,9 +353,20 @@ Reclaim: machine took the delivery but no report within timeoutMs+grace (default
 - **Wire protocol**: `POST /api/machine/sync` (**device token**, NOT the run token - that's revoked at run end, and sync continues idle) posts the full manifest; the server replies `needHashes` (the blobs it lacks); the daemon `PUT /api/machine/blob/:hash` uploads the missing bytes (the server verifies `sha256(body) === :hash` before storing). Small text blobs (**≤64KB**) are inlined in the POST to save the round-trip. `runId` is threaded onto each sync.
 - **Storage (captain decision)**: blob **BYTES** live in **Cloudflare R2** (S3-compatible via `@aws-sdk/client-s3`), keyed by content hash, behind a `BlobStore` interface (`gateway/blobstore.ts`) wired from `LOOPANY_R2_*` env (**no hardcoded creds**); when those are unset the **in-memory** implementation is the **test/dev default**, so tests need no live R2 or network. Metadata lives in two new additive tables, **`blobs`** + **`artifact_files`** (migration **`0011`**) - the R2 variant has **no `content` column**, so the server's zero-exec invariant holds (it only stores/reads bytes, never interprets them). `artifact_files` extends the originally-planned schema with `binary`/`oversize` flags to represent metadata-only files; `lastRunId` records the in-flight run (null for idle edits) purely as the **Phase 3 seam**.
 - **Caps + security (enforced on BOTH daemon and server)**: per-file cap **10MB** → larger files sync as **metadata only** (path + size + `oversize`, no bytes). Path-safety (reject absolute / `..` paths) + the secret/junk **ignore list** (`.git`/`node_modules`/`.loopany`/`.env*`/`*.pem`/`id_rsa*`/`credentials`/`.DS_Store`) are enforced by the daemon (don't send) **and** defensively by the server (`gateway/artifacts.ts`, don't store). Deletions are recorded as **tombstones** (`artifact_files.deleted`), not hard deletes.
-- **Out of scope (intentional)**: Phase 2 (the web **Files view**) and Phase 3 (`run_snapshots` per-run diff) are **not** built - `runId` on syncs + `artifact_files.lastRunId` are the only seams left for them.
+- **Out of scope (intentional, at the time)**: Phase 2 (the web **Files view**) and Phase 3 (`run_snapshots` per-run diff) were **not** built in Phase 1 - `runId` on syncs + `artifact_files.lastRunId` were left as the seams. **Both have since landed - see D11.**
 - **Dependencies**: `chokidar` v4 (daemon), `@aws-sdk/client-s3` (server).
 - **Verification**: `pnpm -r typecheck` + both package builds clean; **35 server tests pass (12 new**, driving the in-memory blob store - no creds/network).
+
+### D11 — Loop artifact live-sync, Phase 2 (web Files view) + Phase 3 (per-run diff) (landed)
+
+- **Motivation**: D10 laid the sync foundation but left the consumer side as seams. D11 builds the **read-only** web surfaces on top: a per-loop Files view and a per-run artifact diff. Both preserve the **zero-exec invariant** - the server only stores/reads bytes and computes pure-string diffs; no writes, no sync-state mutation.
+- **Phase 2 — Files view (read path)**: lazy-by-id server fns `getArtifacts`/`getArtifact` (`server/loopApi.ts`, following the `getTranscript` pattern) delegate to pure helpers in `server/artifactFiles.ts` (read bytes via `gateway.readBlob`, decode text; **binary/oversize → download marker**, never inlined). Rendered by `FilesView.tsx` + `ArtifactFileRow.tsx` as a "Files" section in `JobDetailView`. **Tombstoned/deleted files (`artifact_files.deleted`) never appear.** Binary/oversize bytes download via the session-authed, **path-safe** splat route `routes/api.artifact.$loopId.$.ts`, team-scoped through the shared `auth.loopInScope` predicate that `ownedLoop` also reuses.
+- **Phase 3 — per-run diff**: new additive table **`run_snapshots`** (migration **`0012`**; manifest = `path → {hash, size, binary, oversize}`). The gateway `report()` writes a snapshot from `artifact_files` at finalize (`store.buildLoopManifest`); `getRunDiff({runId})` lazily diffs run N against the prior run (`store.prevRunSnapshot`) - **unified text diff via the pure-string `diff` (jsdiff) lib** in `server/runDiff.ts`, with a **size-delta marker** for binary/oversize/too-large files. Rendered in `RunView`'s "Changes (N)" section; old runs with no snapshot degrade to a calm fallback.
+- **Inline-diff size cap (review fix)**: the synchronous per-file text diff is bounded by `MAX_DIFF_BYTES` = **512KB** (`runDiff.ts`) - larger text files degrade to the size-delta marker like binary/oversize, so a single big file can't block the single-process server.
+- **Daemon flush-before-report**: the daemon flushes a final **run-tagged** sync before reporting (`watcher.flushLoop` + `runner` `reportRun`, under a **bounded flush timeout**) so the snapshot captures end-state.
+- **Shared helper**: byte counts render through `humanBytes` in `lib/format.ts` (extracted, reused by the Files view + diff markers).
+- **Dependencies**: `diff` (jsdiff) v9 (server, pure-string - no exec).
+- **Verification**: `pnpm -r typecheck` + builds clean; new server tests `server/artifactFiles.test.ts` + `server/runDiff.test.ts` drive the in-memory blob store (no creds/network).
 
 ### Verified (local e2e)
 

@@ -19,6 +19,8 @@ export type RunStatus =
 export interface RunSummary {
   /** Run row id — lets the detail view fetch this run's trace directly. */
   id: string
+  /** The loop this run belongs to — lets the run-detail view resolve its files. */
+  loopId: string
   ts: string
   /** In-flight (phase pending/running) — the timeline renders this block pulsing. */
   running?: boolean
@@ -146,6 +148,55 @@ export interface TranscriptStep {
   text?: string
   name?: string
   input?: string
+}
+
+// ---- artifacts: the loop's live-synced files (Phase 2) ----
+
+/** One live file in a loop's current artifact set (metadata only; bytes are
+ *  fetched lazily via getArtifact / the download route). */
+export interface ArtifactSummary {
+  /** Normalized, loop-folder-relative path. */
+  path: string
+  /** Byte size (null when unknown). */
+  size: number | null
+  /** When this file last synced from the machine (ISO). */
+  updatedAt: string
+  /** The bytes contain a NUL → download-only (no inline text render). */
+  binary: boolean
+  /** Over the per-file cap → metadata only (no bytes stored; not downloadable). */
+  oversize: boolean
+}
+
+/** getArtifact result: a text file's decoded content, a marker for a
+ *  binary/oversize file (download via the route instead), or an error. */
+export type ArtifactContent =
+  | { text: string }
+  | { binary: true; size: number | null; oversize: boolean }
+  | { error: string }
+
+// ---- per-run diff: what changed vs the previous run (Phase 3) ----
+
+/** One file's change between a run and the previous run. */
+export interface RunDiffFile {
+  path: string
+  status: 'added' | 'modified' | 'removed'
+  /** Binary/oversize on either side → no inline diff, just the size delta. */
+  binary: boolean
+  /** A real text file that exceeds the inline-diff size cap (but is under the
+   *  oversize cap) → no inline diff, but it's NOT binary — the UI says "too large
+   *  to diff" rather than mislabeling it. */
+  tooLarge?: boolean
+  /** newSize − oldSize (added ⇒ +newSize, removed ⇒ −oldSize); null when unknown. */
+  sizeDelta: number | null
+  /** Unified text diff (text files only); absent for binary/oversize/too-large. */
+  diff?: string
+}
+
+/** getRunDiff result. `hasSnapshot` false ⇒ this run predates the feature
+ *  (no recorded manifest) → the UI shows the degrade copy, not an empty diff. */
+export interface RunDiffResult {
+  hasSnapshot: boolean
+  files: RunDiffFile[]
 }
 
 export type TranscriptResult =

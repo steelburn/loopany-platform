@@ -77,6 +77,14 @@ export const fnum = (n: number): string =>
 /** Duration in ms → "Ns" (empty for null/0). */
 export const dur = (ms: number | null | undefined): string => (ms ? `${Math.round(ms / 1000)}s` : '')
 
+/** Magnitude-formatted byte count — "240 B", "1.8 KB", "3.4 MB" (1024 thresholds). */
+export function humanBytes(n: number): string {
+  const abs = Math.abs(n)
+  if (abs < 1024) return `${abs} B`
+  if (abs < 1024 * 1024) return `${(abs / 1024).toFixed(1)} KB`
+  return `${(abs / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export interface StatusMeta {
   c: string
   label: string
