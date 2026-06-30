@@ -22,7 +22,9 @@ import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
 import { dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
+import { maintainStorage, type MaintainResult } from "./retention.js";
 import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
+import { loopBytesCap, snapshotRetention } from "../env.js";
 import {
   machineIdFromToken,
   getDeviceOwner,
@@ -164,6 +166,23 @@ export class MachineGateway {
         if (run.role === "evolve") this.scheduler.finishEvolution(run.loopId);
         this.notifyRunFailure(run.loopId, run.role, "machine timed out / disconnected");
       }
+    }
+  }
+
+  /**
+   * Periodic storage maintenance: prune each loop's run snapshots to the
+   * retention window, then GC blob bytes no live row needs. Wired to its own
+   * interval in boot (independent of the faster offline-sweep) and exposed for
+   * tests / on-demand triggers. Safe to run concurrently with active syncs (a
+   * grace window + final re-check protect freshly-written/referenced blobs) and
+   * idempotent with no garbage. Best-effort — never throws into the caller.
+   */
+  async maintainStorage(): Promise<MaintainResult> {
+    try {
+      return await maintainStorage(this.blobStore);
+    } catch (err) {
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, "storage maintenance failed");
+      return { snapshotsPruned: 0, blobsReclaimed: 0 };
     }
   }
 
@@ -591,6 +610,11 @@ export class MachineGateway {
     // reflects the run's end-state. Best-effort — never let it fail the report.
     try {
       store.putRunSnapshot(slot.runId, slot.loopId, store.buildLoopManifest(slot.loopId));
+      // Bound the snapshot history right away (cheap, keeps the table from growing
+      // unbounded between maintenance passes). The blobs this unpins are reclaimed
+      // by the periodic GC, not here — the grace window means a just-unreferenced
+      // blob isn't collectable yet anyway, and report() must stay lean + zero-exec.
+      store.pruneRunSnapshots(slot.loopId, snapshotRetention());
     } catch (err) {
       log.warn({ runId: slot.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
     }
@@ -690,6 +714,18 @@ export class MachineGateway {
     const needHashes = new Set<string>();
     const toStore = new Map<string, Buffer>();
 
+    // Per-loop storage cap (runaway guard). We track a PROJECTED footprint as we
+    // reconcile: the loop's already-stored bytes plus any NEW bytes this sync would
+    // add (a file pointing at a hash the server doesn't yet have). When accepting a
+    // new file would push it past the cap we reject THAT file — skip its bytes + its
+    // row — so existing files and deletions still reconcile (the loop never gets
+    // wedged), and surface the cap on the response (mirrors the per-file oversize
+    // signal). Reusing an already-stored hash adds no bytes, so it's always allowed.
+    const bytesCap = loopBytesCap();
+    let projectedBytes = store.loopStoredBytes(loopId);
+    const rejectedPaths: string[] = [];
+    let capExceeded = false;
+
     for (const raw of manifest) {
       const rel = safeRelPath((raw as { path?: unknown })?.path);
       if (!rel) continue; // absolute / traversal / empty → reject
@@ -726,6 +762,21 @@ export class MachineGateway {
       }
 
       const inlined = inline.get(hash);
+      // Does accepting this file add NEW bytes to storage? It doesn't if the server
+      // already has the blob (global content-addressed dedupe) or we're already
+      // taking it this same sync. Only NEW bytes count toward the per-loop cap.
+      const fileSize = inlined?.length ?? (sizeOk ? rawSize : 0);
+      const addsNewBytes = !(store.blobExists(hash) || toStore.has(hash) || needHashes.has(hash));
+      if (addsNewBytes && projectedBytes + fileSize > bytesCap) {
+        // Per-loop storage cap reached → refuse THIS new file's bytes. Skip the row
+        // too (never leave an artifact pointing at a blob we won't store). Existing
+        // files + deletions below still reconcile, so the loop is never wedged.
+        capExceeded = true;
+        rejectedPaths.push(rel);
+        continue;
+      }
+      if (addsNewBytes) projectedBytes += fileSize;
+
       if (inlined) toStore.set(hash, inlined);
       else if (!store.blobExists(hash)) needHashes.add(hash);
 
@@ -748,13 +799,30 @@ export class MachineGateway {
     }
 
     // Deletions = absence from the full manifest → tombstone the vanished paths.
-    const tombstoned = store.tombstoneMissingArtifacts(loopId, keepPaths, runId);
+    // Cap-rejected paths are NOT tombstoned: keep their prior row (the last accepted
+    // version) intact rather than dropping the file just because new bytes were
+    // refused — so they're added to the keep set for the deletion reconciliation.
+    const tombstoned = store.tombstoneMissingArtifacts(loopId, [...keepPaths, ...rejectedPaths], runId);
 
     log.info(
-      { machineId, loopId, files: keepPaths.length, inlined: toStore.size, need: needHashes.size, tombstoned },
+      { machineId, loopId, files: keepPaths.length, inlined: toStore.size, need: needHashes.size, tombstoned, rejected: rejectedPaths.length },
       "sync: reconciled",
     );
-    return { status: 200, body: { ok: true, needHashes: [...needHashes] } };
+    if (capExceeded) {
+      log.warn({ machineId, loopId, used: projectedBytes, cap: bytesCap, rejected: rejectedPaths.length }, "sync: per-loop storage cap reached");
+    }
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        needHashes: [...needHashes],
+        // Storage-cap signal (mirrors the per-file oversize path): when set, the
+        // daemon learns its newest bytes were refused and the loop is at capacity.
+        ...(capExceeded
+          ? { capExceeded: true, bytesUsed: projectedBytes, bytesCap, rejected: rejectedPaths }
+          : {}),
+      },
+    };
   }
 
   // ---- PUT /api/machine/blob/:hash ----

@@ -40,3 +40,58 @@ export function r2Config(): R2Config | null {
   if (!bucket || !accessKeyId || !secretAccessKey || !endpoint) return null;
   return { bucket, endpoint, accessKeyId, secretAccessKey, region: process.env.LOOPANY_R2_REGION?.trim() || "auto" };
 }
+
+/**
+ * Artifact-storage retention / GC knobs (see gateway/retention.ts). Read lazily
+ * from env at call time (not at module load) so tests can set them per-case and
+ * a deploy can tune them without a rebuild. Each has a safe, generous default —
+ * the bias is "keep storage bounded without ever surprising a healthy loop".
+ */
+
+/** A positive env integer, or `fallback` when unset / unparseable / non-positive. */
+function posIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+/**
+ * Per-loop total stored-bytes cap. Once a loop's live (byte-backed) artifact
+ * footprint reaches this, the sync stops accepting NEW bytes for that loop (it
+ * still reconciles deletions and already-stored files) and surfaces the cap —
+ * mirroring how the per-file 10MB cap surfaces oversize. Generous default so a
+ * normal loop folder never hits it; a runaway growing folder does. 500MB.
+ */
+export function loopBytesCap(): number {
+  return posIntEnv("LOOPANY_LOOP_BYTES_CAP", 500 * 1024 * 1024);
+}
+
+/**
+ * How many of the most recent run snapshots to keep per loop. Older ones are
+ * pruned (their now-unreferenced blobs then become GC-collectable). The per-run
+ * diff only needs the immediately-prior snapshot, so 20 keeps ample history for
+ * the "Changes" view while bounding the table + blob retention. Default 20.
+ */
+export function snapshotRetention(): number {
+  return posIntEnv("LOOPANY_SNAPSHOT_RETENTION", 20);
+}
+
+/**
+ * GC grace window: a blob whose metadata row is younger than this is NEVER
+ * collected, even if currently unreferenced. This is the concurrency guard —
+ * a blob a sync just wrote (and is about to reference) can't be swept out from
+ * under it. Generous default (1h) since a leaked blob is only a cost bug that
+ * the next GC pass reclaims anyway. Default 3,600,000ms (1 hour).
+ */
+export function blobGcGraceMs(): number {
+  return posIntEnv("LOOPANY_BLOB_GC_GRACE_MS", 60 * 60 * 1000);
+}
+
+/**
+ * How often the periodic storage-maintenance pass runs (prune snapshots → GC
+ * blobs). Default 15 minutes. Kept independent of the faster offline-sweep tick.
+ */
+export function gcIntervalMs(): number {
+  return posIntEnv("LOOPANY_GC_INTERVAL_MS", 15 * 60 * 1000);
+}

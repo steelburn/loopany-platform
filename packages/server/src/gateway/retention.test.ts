@@ -1,0 +1,282 @@
+/**
+ * Artifact-storage retention / GC tests. The whole point is correctness over
+ * aggressiveness: a still-referenced (shared, or snapshot-retained) blob must
+ * NEVER be reclaimed, while a blob no live row needs IS reclaimed once nothing
+ * pins it. Plus snapshot-window pruning and the per-loop storage cap.
+ *
+ * Runs entirely on the in-memory blob store + a throwaway SQLite DB (no R2, no
+ * network), matching how prod's MemoryBlobStore fallback behaves.
+ */
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+
+import { MemoryBlobStore } from "./blobstore.js";
+
+let tmp: string;
+let db: typeof import("../db/index.js");
+let store: typeof import("../db/store.js");
+let gatewayMod: typeof import("./index.js");
+let retention: typeof import("./retention.js");
+let tokens: typeof import("./tokens.js");
+
+beforeAll(async () => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loopany-retention-"));
+  process.env.LOOPANY_DATA_DIR = tmp;
+  process.env.LOOPANY_DB_PATH = path.join(tmp, "test.db");
+  process.env.LOOPANY_LOG_LEVEL = "silent";
+  db = await import("../db/index.js");
+  db.runMigrations();
+  store = await import("../db/store.js");
+  gatewayMod = await import("./index.js");
+  retention = await import("./retention.js");
+  tokens = await import("./tokens.js");
+});
+
+afterAll(() => {
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  db.sqlite.exec(
+    "DELETE FROM run_snapshots; DELETE FROM artifact_files; DELETE FROM blobs; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;",
+  );
+});
+
+afterEach(() => {
+  delete process.env.LOOPANY_LOOP_BYTES_CAP;
+});
+
+function sha256(s: string | Buffer): string {
+  return createHash("sha256").update(s).digest("hex");
+}
+
+const scheduler = {
+  maybeFlagEvolve(): void {},
+  finishEvolution(): void {},
+  finishEdit(): void {},
+  addLoop(): void {},
+  removeLoop(): void {},
+  runNow(): void {},
+} as any;
+
+function gatewayWithStore(): { gw: InstanceType<typeof gatewayMod.MachineGateway>; blobs: MemoryBlobStore } {
+  const blobs = new MemoryBlobStore();
+  return { gw: new gatewayMod.MachineGateway(scheduler, blobs), blobs };
+}
+
+function seed() {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  return { token, machineId, loop };
+}
+
+/** Store a blob (bytes + metadata) directly, as a sync would. */
+async function putBlob(blobs: MemoryBlobStore, content: string): Promise<string> {
+  const hash = sha256(content);
+  await blobs.put(hash, Buffer.from(content));
+  store.recordBlob(hash, content.length, false);
+  return hash;
+}
+
+// A negative grace pushes the cutoff into the future so every just-written blob
+// counts as "old enough" — letting these tests exercise collection without a wait.
+const FORCE = -10_000;
+
+test("GC keeps a blob still referenced by another live file (shared content)", async () => {
+  const { loop } = seed();
+  const { blobs } = gatewayWithStore();
+  const hash = await putBlob(blobs, "shared bytes");
+
+  // Two distinct paths point at the SAME content hash.
+  store.upsertArtifactFile({ loopId: loop.id, path: "a.txt", hash, size: 11, binary: false, oversize: false, lastRunId: null });
+  store.upsertArtifactFile({ loopId: loop.id, path: "b.txt", hash, size: 11, binary: false, oversize: false, lastRunId: null });
+
+  // Delete one path → it tombstones, but the blob is still referenced by the other.
+  store.tombstoneMissingArtifacts(loop.id, ["a.txt"], null);
+
+  const reclaimed = await retention.gcBlobs(blobs, FORCE);
+  expect(reclaimed).toBe(0);
+  expect(await blobs.has(hash)).toBe(true);
+  expect(store.blobExists(hash)).toBe(true);
+});
+
+test("GC keeps a blob a retained snapshot still references, then reclaims it once pruned", async () => {
+  const { loop, machineId } = seed();
+  const { blobs } = gatewayWithStore();
+  const hash = await putBlob(blobs, "report v1");
+
+  // The blob was a live file, captured into a run snapshot, then the file deleted.
+  store.upsertArtifactFile({ loopId: loop.id, path: "report.md", hash, size: 9, binary: false, oversize: false, lastRunId: null });
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
+  store.putRunSnapshot(run.id, loop.id, { "report.md": { hash, size: 9, binary: false, oversize: false } });
+  store.tombstoneMissingArtifacts(loop.id, [], null); // path gone from live set
+
+  // No live artifact_files row references it now — but the snapshot does, so KEEP.
+  const r1 = await retention.gcBlobs(blobs, FORCE);
+  expect(r1).toBe(0);
+  expect(await blobs.has(hash)).toBe(true);
+
+  // Prune the snapshot (window of 0) → nothing references the hash anymore → reclaim.
+  expect(store.pruneRunSnapshots(loop.id, 0)).toBe(1);
+  const r2 = await retention.gcBlobs(blobs, FORCE);
+  expect(r2).toBe(1);
+  expect(await blobs.has(hash)).toBe(false);
+  expect(store.blobExists(hash)).toBe(false);
+});
+
+test("the grace window protects freshly-written (unreferenced) blobs", async () => {
+  const { blobs } = gatewayWithStore();
+  const hash = await putBlob(blobs, "just written, not yet referenced");
+
+  // Default-ish grace (1h): a brand-new unreferenced blob is NOT collected — it may
+  // be a blob a concurrent sync is about to reference.
+  const kept = await retention.gcBlobs(blobs, 60 * 60 * 1000);
+  expect(kept).toBe(0);
+  expect(await blobs.has(hash)).toBe(true);
+
+  // With the grace effectively elapsed, the same unreferenced blob IS reclaimed.
+  const reclaimed = await retention.gcBlobs(blobs, FORCE);
+  expect(reclaimed).toBe(1);
+  expect(await blobs.has(hash)).toBe(false);
+});
+
+test("snapshot retention prunes the oldest beyond the window, keeps the newest N", async () => {
+  const { loop, machineId } = seed();
+  const ids: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
+    store.putRunSnapshot(run.id, loop.id, {});
+    ids.push(run.id);
+    await new Promise((r) => setTimeout(r, 5)); // distinct createdAt for deterministic ordering
+  }
+
+  // Keep the 2 most recent → 3 oldest pruned.
+  const pruned = store.pruneRunSnapshots(loop.id, 2);
+  expect(pruned).toBe(3);
+  // Oldest three gone, newest two survive.
+  expect(store.getRunSnapshot(ids[0]!)).toBeUndefined();
+  expect(store.getRunSnapshot(ids[2]!)).toBeUndefined();
+  expect(store.getRunSnapshot(ids[3]!)).toBeDefined();
+  expect(store.getRunSnapshot(ids[4]!)).toBeDefined();
+
+  // Idempotent: pruning again at the same window removes nothing.
+  expect(store.pruneRunSnapshots(loop.id, 2)).toBe(0);
+});
+
+test("pruneSnapshots applies the window across every loop", async () => {
+  const { machineId } = seed();
+  const l2 = store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  for (const loopId of [l2.id]) {
+    for (let i = 0; i < 4; i++) {
+      const run = store.addRun({ loopId, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
+      store.putRunSnapshot(run.id, loopId, {});
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+  expect(retention.pruneSnapshots(1)).toBe(3);
+});
+
+test("per-loop cap blocks new bytes past the limit and surfaces it", async () => {
+  process.env.LOOPANY_LOOP_BYTES_CAP = "100"; // tiny cap for the test
+  const { token, loop } = seed();
+  const { gw, blobs } = gatewayWithStore();
+
+  const a = "a".repeat(60);
+  const b = "b".repeat(60);
+  const ha = sha256(a);
+  const hb = sha256(b);
+
+  // First file (60B) fits under the 100B cap → stored.
+  const r1 = await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [{ path: "a.txt", hash: ha, size: a.length }],
+    blobs: [{ hash: ha, encoding: "utf8", data: a }],
+  });
+  expect(r1.status).toBe(200);
+  expect((r1.body as any).capExceeded).toBeUndefined();
+  expect(await blobs.has(ha)).toBe(true);
+
+  // Second file (another 60B) would push the loop to 120B > 100B cap → rejected.
+  const r2 = await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "a.txt", hash: ha, size: a.length },
+      { path: "b.txt", hash: hb, size: b.length },
+    ],
+    blobs: [{ hash: hb, encoding: "utf8", data: b }],
+  });
+  expect(r2.status).toBe(200);
+  expect((r2.body as any).capExceeded).toBe(true);
+  expect((r2.body as any).rejected).toEqual(["b.txt"]);
+  // The rejected file's bytes were NOT stored and it's not in the live set…
+  expect(await blobs.has(hb)).toBe(false);
+  expect(store.getArtifactFile(loop.id, "b.txt")).toBeUndefined();
+  // …but the already-accepted file is untouched (loop not wedged).
+  expect(store.getArtifactFile(loop.id, "a.txt")!.hash).toBe(ha);
+});
+
+test("reusing an already-stored hash adds no bytes, so it's allowed even at the cap", async () => {
+  process.env.LOOPANY_LOOP_BYTES_CAP = "100";
+  const { token, loop } = seed();
+  const { gw, blobs } = gatewayWithStore();
+  const a = "a".repeat(60);
+  const ha = sha256(a);
+
+  await gw.sync(token, { loopId: loop.id, manifest: [{ path: "a.txt", hash: ha, size: a.length }], blobs: [{ hash: ha, encoding: "utf8", data: a }] });
+
+  // A second path with the SAME content (dedup ⇒ zero new bytes) is accepted.
+  const r = await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "a.txt", hash: ha, size: a.length },
+      { path: "copy.txt", hash: ha, size: a.length },
+    ],
+  });
+  expect((r.body as any).capExceeded).toBeUndefined();
+  expect(store.getArtifactFile(loop.id, "copy.txt")!.hash).toBe(ha);
+  expect(await blobs.has(ha)).toBe(true);
+});
+
+test("maintainStorage is idempotent and safe with no garbage", async () => {
+  const { gw } = gatewayWithStore();
+  const r1 = await gw.maintainStorage();
+  expect(r1).toEqual({ snapshotsPruned: 0, blobsReclaimed: 0 });
+  const r2 = await gw.maintainStorage();
+  expect(r2).toEqual({ snapshotsPruned: 0, blobsReclaimed: 0 });
+});
+
+test("maintainStorage prunes snapshots then reclaims the blobs they freed", async () => {
+  const { loop, machineId } = seed();
+  const { gw, blobs } = gatewayWithStore();
+
+  // Two runs, each snapshotting its own (now unreferenced — no live file) blob.
+  const old = await putBlob(blobs, "old run content");
+  const recent = await putBlob(blobs, "recent run content");
+  const r1 = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
+  store.putRunSnapshot(r1.id, loop.id, { "f.md": { hash: old, size: 15, binary: false, oversize: false } });
+  await new Promise((r) => setTimeout(r, 5));
+  const r2 = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: new Date().toISOString() });
+  store.putRunSnapshot(r2.id, loop.id, { "f.md": { hash: recent, size: 18, binary: false, oversize: false } });
+
+  // Window of 1: prune the older snapshot → its blob `old` becomes collectable.
+  // (Use a forced grace via the lower-level call after pruning, since maintainStorage
+  // uses the configured grace; here we drive the env knob to elapse the window.)
+  process.env.LOOPANY_BLOB_GC_GRACE_MS = "1"; // ~immediate
+  process.env.LOOPANY_SNAPSHOT_RETENTION = "1";
+  await new Promise((r) => setTimeout(r, 5));
+  try {
+    const res = await gw.maintainStorage();
+    expect(res.snapshotsPruned).toBe(1);
+    expect(res.blobsReclaimed).toBe(1);
+    expect(await blobs.has(old)).toBe(false); // freed
+    expect(await blobs.has(recent)).toBe(true); // still snapshot-referenced
+  } finally {
+    delete process.env.LOOPANY_BLOB_GC_GRACE_MS;
+    delete process.env.LOOPANY_SNAPSHOT_RETENTION;
+  }
+});

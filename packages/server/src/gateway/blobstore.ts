@@ -24,6 +24,8 @@ export interface BlobStore {
   put(hash: string, bytes: Buffer): Promise<void>;
   /** Fetch bytes for a hash, or null when absent. */
   get(hash: string): Promise<Buffer | null>;
+  /** Reclaim a blob's bytes (GC). Idempotent — deleting an absent hash is a no-op. */
+  delete(hash: string): Promise<void>;
 }
 
 /** In-memory blob store — dev/test default (no network, no credentials). */
@@ -37,6 +39,9 @@ export class MemoryBlobStore implements BlobStore {
   }
   async get(hash: string): Promise<Buffer | null> {
     return this.map.get(hash) ?? null;
+  }
+  async delete(hash: string): Promise<void> {
+    this.map.delete(hash);
   }
 }
 
@@ -96,6 +101,14 @@ export class R2BlobStore implements BlobStore {
       if (isNotFound(err)) return null;
       throw err;
     }
+  }
+
+  async delete(hash: string): Promise<void> {
+    const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+    const client = await this.s3();
+    // S3/R2 DELETE is idempotent — deleting an absent key succeeds — so no
+    // not-found special-casing is needed here.
+    await client.send(new DeleteObjectCommand({ Bucket: this.cfg.bucket, Key: blobKey(hash) }));
   }
 }
 

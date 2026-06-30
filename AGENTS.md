@@ -181,6 +181,39 @@ LLM and executes no user code**.
   before reporting (`watcher.flushLoop` + `runner` `reportRun`) so the snapshot captures
   end-state. Old runs with no snapshot degrade to a calm fallback; zero-exec invariant
   holds (server only stores/reads bytes + computes pure-string diffs).
+- **Artifact storage retention / GC (`gateway/retention.ts`).** R2 blob bytes are
+  content-addressed + deduped; before this, nothing reclaimed a blob once the path that
+  referenced it was deleted/overwritten, so R2 grew monotonically. Three pieces, all
+  server-side, all working on BOTH the R2 and in-memory `BlobStore` (tests run in-memory).
+  **(1) Blob GC** — `BlobStore.delete(hash)` (idempotent; R2 `DeleteObjectCommand`, memory
+  `map.delete`). `retention.gcBlobs(blobStore, graceMs)` computes the LIVE keep-set
+  (`store.liveBlobRefs`: every non-null `artifact_files.hash` UNION every hash in every
+  retained `run_snapshots` manifest — tombstones carry `hash=null` so they don't pin a
+  blob) and reclaims only blobs NOT in it. CRITICAL invariant: a blob shared by multiple
+  file rows AND/OR retained snapshots is never deleted. Concurrency-safe via two guards: a
+  **grace window** (`blobGcGraceMs`, default **1h** — a blob whose `blobs.createdAt` is
+  younger is never collected, so a blob a concurrent sync just wrote/referenced is
+  untouchable) plus a final per-candidate `store.blobIsReferenced` re-check right before the
+  byte delete. Phase A (pick garbage + delete metadata rows) is fully synchronous
+  (better-sqlite3) so the keep-set can't go stale mid-computation; after a metadata row is
+  dropped, a re-referencing sync sees `blobExists=false` and re-PUTs (self-healing) — never
+  a live row pointing at deleted bytes. Bias: a leaked blob is a cost bug the next pass
+  reclaims; a wrongly-deleted blob would be data loss, so when in doubt KEEP.
+  **(2) Snapshot retention** — `store.pruneRunSnapshots(loopId, keep)` keeps the newest
+  `keep` (by `createdAt`); `LOOPANY_SNAPSHOT_RETENTION` default **20** (the diff only needs
+  the prior snapshot; 20 keeps ample "Changes" history while bounding blob retention).
+  Pruned at `report()` time (prompt, cheap) AND in the periodic pass. Pruning is what
+  unpins old blobs so the GC can collect them. **(3) Per-loop byte cap** — `store.loopStoredBytes`
+  (sum of live, byte-backed `artifact_files.size`); `sync()` tracks a projected footprint
+  and, when accepting a file's NEW bytes (a hash the server doesn't already have — dedup
+  reuse adds none) would exceed `LOOPANY_LOOP_BYTES_CAP` (default **500MB**), rejects THAT
+  file (skips its bytes + row, NOT tombstoned — prior version kept) and surfaces
+  `{capExceeded, bytesUsed, bytesCap, rejected:[paths]}` on the sync response (mirrors the
+  per-file 10MB oversize signal); existing files + deletions still reconcile so the loop
+  never wedges. **When GC runs:** a dedicated `boot.ts` interval (`gcIntervalMs`, default
+  **15min**, independent of the faster offline-sweep) calls `gateway.maintainStorage()`
+  (prune snapshots → GC blobs; best-effort, never throws). All knobs are lazy env reads
+  (`env.ts`) so tests set them per-case. Tests: `gateway/retention.test.ts`.
 - **Coding-agent recording (`loops.agent`).** A loop records WHICH coding agent it's
   bound to / was created by: `loops.agent` (`text`, TS-only enum `claude-code|codex`,
   NOT NULL default `claude-code`, migration `0013`). **Recording-only** — the daemon
