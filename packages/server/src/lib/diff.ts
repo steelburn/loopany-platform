@@ -21,12 +21,31 @@ export interface DiffLine {
   gutter: string
 }
 
-/** Classify one physical diff line. */
-function classify(line: string): DiffLine {
-  // File-header / index lines come before content and must NOT be read as add/del.
-  if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index '))
-    return { kind: 'meta', text: line, gutter: '' }
+/**
+ * Classify one physical diff line, given whether we are already inside a hunk.
+ * Classification is STATEFUL over hunk position: only the preamble (before the
+ * first `@@`) may hold `---`/`+++`/`diff `/`index `/`Index:`/`===` headers, so
+ * once inside a hunk a content line whose text merely begins with `--`/`++`
+ * (a markdown `---` HR/frontmatter, a `-- comment`, a `++x`) is read by its
+ * single leading marker char and keeps its del/add tint + stat.
+ */
+function classify(line: string, inHunk: boolean): DiffLine {
   if (line.startsWith('@@')) return { kind: 'hunk', text: line, gutter: '' }
+  if (!inHunk) {
+    // Preamble headers (jsdiff / createTwoFilesPatch) — never content.
+    if (
+      line.startsWith('---') ||
+      line.startsWith('+++') ||
+      line.startsWith('diff ') ||
+      line.startsWith('index ') ||
+      line.startsWith('Index:') ||
+      line.startsWith('===')
+    )
+      return { kind: 'meta', text: line, gutter: '' }
+    // Any other pre-hunk line is neutral context.
+    return { kind: 'context', text: line, gutter: '' }
+  }
+  // Inside a hunk every line is content — classify by its first char ONLY.
   if (line.startsWith('+')) return { kind: 'add', text: line.slice(1), gutter: '+' }
   if (line.startsWith('-')) return { kind: 'del', text: line.slice(1), gutter: '-' }
   // A leading space is the unified-diff context marker; strip exactly one.
@@ -42,7 +61,12 @@ function classify(line: string): DiffLine {
 export function parseUnifiedDiff(diff: string): DiffLine[] {
   if (!diff) return []
   const body = diff.endsWith('\n') ? diff.slice(0, -1) : diff
-  return body.split('\n').map(classify)
+  let inHunk = false
+  return body.split('\n').map((line) => {
+    const classified = classify(line, inHunk)
+    if (classified.kind === 'hunk') inHunk = true
+    return classified
+  })
 }
 
 /** Counts of added/removed content lines — for a compact per-file "+N −M" tally. */

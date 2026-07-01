@@ -39,8 +39,7 @@ const GUTTER_CLS: Record<DiffLine['kind'], string> = {
  * (`overflow-x-auto min-w-0`) so a wide line never widens the page. Height is
  * capped so a long diff scrolls inside its own box.
  */
-function DiffBody({ diff }: { diff: string }) {
-  const lines = parseUnifiedDiff(diff)
+function DiffBody({ lines }: { lines: DiffLine[] }) {
   return (
     <div className="min-w-0 max-h-[420px] overflow-auto border-t border-hairline bg-raised font-mono text-[12px] leading-[1.55]">
       <div className="min-w-max">
@@ -58,9 +57,9 @@ function DiffBody({ diff }: { diff: string }) {
 }
 
 /** One file row header — status word, path, size delta, and binary/too-large markers. */
-function FileHead({ f }: { f: RunDiffFile }) {
+function FileHead({ f, lines }: { f: RunDiffFile; lines: DiffLine[] | null }) {
   const delta = fmtDelta(f.sizeDelta)
-  const stat = f.diff ? diffStat(parseUnifiedDiff(f.diff)) : null
+  const stat = lines ? diffStat(lines) : null
   return (
     <span className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 font-mono text-[12.5px]">
       <span className={`shrink-0 text-[10px] uppercase tracking-[0.08em] ${STATUS_CLS[f.status]}`}>{STATUS_LABEL[f.status]}</span>
@@ -96,19 +95,20 @@ export function DiffView({ files }: { files: RunDiffFile[] }) {
         if (!f.diff)
           return (
             <div key={f.path} className="rounded-md border border-hairline bg-surface px-3.5 py-2">
-              <FileHead f={f} />
+              <FileHead f={f} lines={null} />
             </div>
           )
-        const open = parseUnifiedDiff(f.diff).length <= AUTO_OPEN_LINES
+        const lines = parseUnifiedDiff(f.diff)
+        const open = lines.length <= AUTO_OPEN_LINES
         return (
           <details key={f.path} open={open} className="group min-w-0 overflow-hidden rounded-md border border-hairline bg-surface">
             <summary className="flex cursor-pointer select-none items-center gap-2 px-3.5 py-2 marker:content-['']">
               <span aria-hidden className="shrink-0 text-[10px] text-disabled transition-transform group-open:rotate-90">
                 ▸
               </span>
-              <FileHead f={f} />
+              <FileHead f={f} lines={lines} />
             </summary>
-            <DiffBody diff={f.diff} />
+            <DiffBody lines={lines} />
           </details>
         )
       })}
