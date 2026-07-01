@@ -35,6 +35,9 @@ interface RunRow {
   durationMs: number | null;
   error: string | null;
   message: string | null;
+  // The claude-code session id behind this run — lets the reader jump to its
+  // on-disk `<session>.jsonl` for the full, unclipped record (see evolve.md).
+  sessionId: string | null;
   transcript: string;
   transcriptTruncated: boolean;
 }
@@ -126,6 +129,7 @@ function formatRun(r: RunRow): string {
   const dur = r.durationMs != null ? ` · ${(r.durationMs / 1000).toFixed(1)}s` : "";
   const head = `● ${r.ts}  ${r.role}  ${outcome}${dur}`;
   const lines = [head];
+  if (r.sessionId) lines.push(`  session: ${r.sessionId}`);
   if (r.error) lines.push(`  error: ${r.error}`);
   if (r.message) lines.push(`  ${r.message}`);
   if (r.transcript) {

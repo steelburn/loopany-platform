@@ -496,6 +496,9 @@ export class MachineGateway {
         durationMs: r.durationMs ?? null,
         error: r.error ?? null,
         message: r.message ?? null,
+        // The claude-code session id lets the agent jump from this survey straight
+        // to the run's on-disk `<session>.jsonl` for a deep dive (see evolve.md).
+        sessionId: r.sessionId ?? null,
         transcript: text,
         transcriptTruncated: truncated,
       };
