@@ -21,8 +21,9 @@ for (const name of ASSETS) {
   const from = path.join(srcDir, name);
   const to = path.join(distDir, name);
   if (!fs.existsSync(from)) {
-    console.warn(`copy-runtime-assets: ${name} not found at ${from} — skipping`);
-    continue;
+    throw new Error(
+      `copy-runtime-assets: required asset ${name} not found at ${from} — refusing to build a package without it (tools.call would fail at runtime)`,
+    );
   }
   fs.copyFileSync(from, to);
   console.log(`copy-runtime-assets: ${name} → dist/`);
