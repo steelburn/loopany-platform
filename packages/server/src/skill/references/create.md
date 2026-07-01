@@ -80,7 +80,8 @@ Keep the absolute path to `README.md` — it goes in the config as `taskFile`.
 A loop fires on a cron schedule. Each run is **either**:
 
 - **workflow** *(preferred — zero-LLM, cheap)*: a JS **function body** run in Node
-  with global `fetch` and a `prev` cursor (the last run's returned `state`).
+  with global `fetch`, a `prev` cursor (the last run's returned `state`), and
+  `tools.call(...)` for the machine's configured MCP servers (see below).
   Contract: `return { message?: string, state?: any }`. `message` is sent to the
   user verbatim (no LLM). `state` is persisted and handed back as `prev` next run
   (use it to diff / avoid repeating). To escalate to the coding agent instead,
@@ -136,6 +137,49 @@ Rules:
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
 - **Don't add `timezone`, `claim`, or any auth** — `loopany new` injects the
   timezone, the connect-key claim, and this machine's device token for you.
+
+### MCP tools in a workflow — `tools.call(name, args)`
+
+A workflow can call the **MCP servers already configured on this machine** (the same
+ones the coding agent reaches for) via `tools.call`. This is the point of an MCP-backed
+workflow: the mechanical half of a loop — the identical *fetch / list / pull / dedup /
+filter / sort* the agent used to redo every single run — becomes cheap deterministic JS,
+and the agent is left with only the genuine judgment/summary/decision. An MCP-backed
+workflow does not make the workflow "smart"; it just gives it the same tools, so the
+repetitive front-work stops costing an LLM call.
+
+```js
+// name is "server.tool" (server before the first dot). args is the tool's input object.
+const res = await tools.call("posthog.query-run", { query: { kind: "HogQLQuery", query: "..." } });
+// res = { text: string, data: <parsed structured value | null>, truncated?: true }
+//   res.text — the tool's textual output (capped).
+//   res.data — structured content, or JSON parsed from text when the text is JSON, else null.
+// Then either finish deterministically…
+return { message: summarize(res.data), state: { cursor: res.data.last } };
+// …or hand the PREPARED data to the agent for the judgment part:
+agent("rank these by relevance and write the digest", res.data);
+```
+
+Contract and guardrails:
+- **Read-like only (phase 1).** Use `tools.call` for read-like tools — fetch / list /
+  query / get. Do NOT lift a write or high-risk tool call (create / delete / send /
+  deploy) into a workflow yet; leave those with the agent.
+- **Caps.** Args and results are size-capped (defaults 16KB args / 256KB result;
+  override with `LOOPANY_WORKFLOW_TOOL_ARGS_CAP` / `LOOPANY_WORKFLOW_TOOL_RESULT_CAP` /
+  `LOOPANY_WORKFLOW_TOOL_TIMEOUT_SECONDS`). An oversized arg throws; an oversized result
+  is truncated (`res.truncated`).
+- **Throws on missing.** A missing/unconfigured server, a missing/failed tool, missing or
+  expired auth, or an unavailable MCP runtime **throws a clear, specific error** naming the
+  server/tool and what's missing. There is no silent success.
+- **No interactive auth.** The workflow runs unattended, so `tools.call` never launches an
+  interactive OAuth/browser flow — it uses only already-cached credentials. If a server
+  isn't authorized yet, the call throws (which is fine: see §Fallback below).
+- **Fallback is automatic.** If any `tools.call` throws (or the workflow otherwise fails),
+  the run does NOT silently drop — it falls back to the coding agent, which first completes
+  this run's task anyway, then diagnoses the failure (and, if fixing needs the user to
+  authorize the MCP server, writes a dated `workflow-setup-<date>.md` with a one-line fix
+  prompt). So an MCP-backed workflow is safe to author even if first-time auth might not be
+  set up yet.
 
 ## 3 · Create the loop
 
