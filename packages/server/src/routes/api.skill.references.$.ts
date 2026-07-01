@@ -5,7 +5,8 @@ import { createFileRoute } from '@tanstack/react-router'
 // src/skill/). Served as the BOOTSTRAP FALLBACK: normally the agent reads these
 // from the local install (`loopany up` installs the skill via `npx skills` into
 // ./.claude/skills/loopany/references/), but when that install was skipped (no
-// network/npx) the SKILL.md overview tells the agent to fetch them here instead.
+// network/npx) the bootstrap doc (skill/bootstrap.md, served at /api/skill) tells
+// the agent to fetch them here instead.
 import create from '../skill/references/create.md?raw'
 import update from '../skill/references/update.md?raw'
 import evolve from '../skill/references/evolve.md?raw'

@@ -26,8 +26,9 @@ you control to run the loops on.
    npx @crewlet/loopany up --server-url <server-url> --connect-key <connect-key>
    ```
 
-   Or paste the whole snippet into your local Claude Code — it follows the
-   bundled loopany skill to connect the machine and build the loop for you.
+   Or paste the whole snippet into your local Claude Code — it fetches the
+   loopany onboarding doc and follows it to connect the machine and build the
+   loop for you.
 
 That's it. The server schedules the loop; your machine picks up each due run,
 executes it with your local agent, and reports the result back to the dashboard
