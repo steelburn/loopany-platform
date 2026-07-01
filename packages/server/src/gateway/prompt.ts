@@ -3,28 +3,29 @@
  * ship inside a delivery (the machine just writes the prompt to a file and runs
  * claude with it). Ported from c0's loop-prompt.ts, bound to the new Loop row
  * and the renamed `loopany` CLI. Prompt prose lives as markdown loaded +
- * `{{token}}`-filled here. The `evolve` text is the SINGLE source of truth shared
+ * `{{token}}`-filled here. ALL prompt prose now lives under src/skill/: the public
+ * authoring trio (create/update/evolve) in skill/references/, and the INTERNAL
+ * run prompts (exec-loop, edit) in skill/run/ — server-side run-dispatch only,
+ * never served or bundled. The `evolve` text is the SINGLE source of truth shared
  * with the installable agent skill (skill/references/evolve.md) — run-dispatch and
- * the skill read the same file, so the evolution guidance can't drift. The
- * run-only prompts (control-on/off, exec-loop) and `edit` (a run-token verb prompt
- * with no authoring twin — see skill/references/update.md for the authoring CLI)
- * stay under scheduler/prompts/.
+ * the skill read the same file, so the evolution guidance can't drift. `edit` is a
+ * run-token verb prompt with no authoring twin (see skill/references/update.md for
+ * the authoring CLI). §4 of exec-loop is ONE static section for every loop — the
+ * prompt does NOT branch on `allowControl`; it tells the run to consult `loopany
+ * show` (which reports the effective self-schedule capability) before nudging the
+ * cadence, and the run's self-schedule surface is just reschedule + set-cron.
  */
 import type { Loop, Run, StateField } from "../db/schema.js";
 
 // Inlined at build time (Vite ?raw) so the prompt prose ships inside the nitro
 // bundle. Reading them from disk at runtime broke in prod: nitro bundles JS only,
 // so the `*.md` source files don't exist under .output and poll() threw ENOENT.
-// `?raw` resolves identically from skill/references/ as from scheduler/prompts/.
-import controlOn from "../scheduler/prompts/control-on.md?raw";
-import controlOff from "../scheduler/prompts/control-off.md?raw";
-import execLoop from "../scheduler/prompts/exec-loop.md?raw";
+// `?raw` resolves identically from skill/run/ as it did from scheduler/prompts/.
+import execLoop from "../skill/run/exec-loop.md?raw";
 import evolve from "../skill/references/evolve.md?raw";
-import edit from "../scheduler/prompts/edit.md?raw";
+import edit from "../skill/run/edit.md?raw";
 
 const PROMPTS: Record<string, string> = {
-  "control-on": controlOn,
-  "control-off": controlOff,
   "exec-loop": execLoop,
   evolve,
   edit,
@@ -36,8 +37,8 @@ function loadPrompt(name: string): string {
   return v.trim();
 }
 
-function fillPrompt(name: string, vars: Record<string, string>): string {
-  return loadPrompt(name).replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
+function fillVars(text: string, vars: Record<string, string>): string {
+  return text.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 }
 
 /** One-line human description of a loop's metric schema: `key (unit) — label; …`. */
@@ -56,8 +57,7 @@ export function buildLoopSystemPrompt(loop: Loop): string {
   #   ${formatSchemaFields(schema)}
   # report a subset if you only observed some; big payloads: --state-file <path>.`
     : `loopany report --status new --sample <number>     # optional single metric for charts`;
-  const controlSection = loadPrompt(loop.allowControl ? "control-on" : "control-off");
-  return fillPrompt("exec-loop", { name, taskFile, stateLine, controlSection });
+  return fillVars(loadPrompt("exec-loop"), { name, taskFile, stateLine });
 }
 
 /** The per-run user turn (the standing prompt carries the discipline). */
