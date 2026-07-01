@@ -122,6 +122,7 @@ export function shapeResult(raw) {
       }
     }
   }
+  let dataDropped = false;
   if (data !== null) {
     let dj;
     try {
@@ -129,10 +130,13 @@ export function shapeResult(raw) {
     } catch {
       dj = "";
     }
-    if (!dj || dj.length > cap) data = null; // don't let structured data blow the cap
+    if (!dj || dj.length > cap) {
+      data = null; // don't let structured data blow the cap
+      dataDropped = true;
+    }
   }
   const out = { text: clipped.text, data };
-  if (clipped.truncated) out.truncated = true;
+  if (clipped.truncated || dataDropped) out.truncated = true;
   return out;
 }
 
@@ -168,6 +172,21 @@ async function getRuntime(makeRuntime) {
     })();
   }
   return _runtimePromise;
+}
+
+/**
+ * Best-effort dispose of the cached mcporter runtime and reset the cache. A no-op when no
+ * runtime was ever created; never throws — an open MCP connection or a spawned stdio
+ * MCP-server child must not keep the workflow subprocess alive past its result write.
+ */
+export async function closeRuntime() {
+  const pending = _runtimePromise;
+  _runtimePromise = null;
+  if (!pending) return;
+  try {
+    const rt = await pending;
+    if (rt && typeof rt.close === "function") await rt.close();
+  } catch {}
 }
 
 /**

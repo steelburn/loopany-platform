@@ -10,6 +10,7 @@ import {
   callTool,
   capArgs,
   classifyCallError,
+  closeRuntime,
   extractText,
   parseToolName,
   shapeResult,
@@ -98,6 +99,7 @@ describe("extractText / shapeResult", () => {
     const big = { items: Array.from({ length: 100 }, (_, i) => ({ i })) };
     const r = shapeResult({ content: [{ type: "text", text: "short" }], structuredContent: big });
     expect(r.data).toBeNull();
+    expect(r.truncated).toBe(true);
   });
 });
 
@@ -166,6 +168,10 @@ describe("callTool (fake runtime — no network)", () => {
         },
       }),
     ).rejects.toThrow(/boom/);
+  });
+
+  test("closeRuntime is a no-op (never throws) when no runtime was created", async () => {
+    await expect(closeRuntime()).resolves.toBeUndefined();
   });
 
   test("rejects oversized args before any runtime call", async () => {

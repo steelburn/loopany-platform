@@ -78,9 +78,13 @@ const __run = async (prev) => {
 ${body}
 };
 __run(prev)
-  .then((out) => {
+  .then(async (out) => {
     const result = typeof out === "string" ? { message: out } : (out ?? {});
     writeFileSync(__OUT, JSON.stringify({ ...result, agentCalls: __agentCalls }));
+    try {
+      if (__bridgeMod && typeof __bridgeMod.closeRuntime === "function") await __bridgeMod.closeRuntime();
+    } catch {}
+    process.exit(0);
   })
   .catch((e) => { console.error(e && e.stack ? e.stack : String(e)); process.exit(1); });
 `;
