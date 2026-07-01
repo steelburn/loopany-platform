@@ -185,6 +185,9 @@ LLM and executes no user code**.
   durationMs/error/message + **`sessionId`** (`r.sessionId ?? null` — the claude-code
   session id, so the evolve agent or a user can jump from the survey straight to the run's
   on-disk `<session>.jsonl` deep dive; already stored on the run row, just now returned) +
+  the run's **reported metrics** (`state` = the metric object, `sample` = the single-metric
+  sample, both `?? null`) so the survey surfaces the numbers a run reported alongside its
+  transcript (matches what `buildEvolveTask` feeds the evolve agent) +
   the transcript flattened to text (`renderTranscript`,
   clipped to 8000 chars/run → `transcriptTruncated`). Mounted at `GET /api/machine/log?
   loopId&limit` (`routes/api.machine.log.ts`, Bearer device token). NO new auth scheme.
@@ -195,8 +198,9 @@ LLM and executes no user code**.
   else the current cwd is matched against each loop's resolved folder (most-specific
   wins; a subdir of the workdir still matches). `listLoops` now also returns
   `workdir`/`taskFile` so the daemon can do that match. The daemon's `RunRow` carries
-  `sessionId`, surfaced in BOTH the human render (a compact `session: <id>` line) and the
-  `--json` output. Every external touch (cwd/fetch/
+  `sessionId` plus the reported metrics (`state`/`sample`), surfaced in BOTH the human render
+  (a compact `session: <id>` line and, when present, a `metrics: sample=…, <k>=<v>` line) and
+  the `--json` output. Every external touch (cwd/fetch/
   out/err/server/token) is an injectable seam (`log.test.ts`, no network). The skill's
   `references/update.md` tells the agent to run `loopany log` before reshaping a loop, and
   `references/evolve.md`'s two-lens log-reading uses the returned `session` id to locate the
