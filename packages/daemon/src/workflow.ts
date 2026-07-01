@@ -74,6 +74,14 @@ const tools = {
     return __bridgeMod.callTool(name, args);
   },
 };
+// Bounded best-effort close of the MCP bridge runtime so a lingering MCP
+// connection or spawned stdio MCP-server child can't keep this subprocess alive.
+// Raced against a hard 2s deadline: a closeRuntime() that never resolves (a stdio
+// child that won't exit) still lets the process exit deterministically.
+const __closeBridge = async () => {
+  if (!__bridgeMod || typeof __bridgeMod.closeRuntime !== "function") return;
+  try { await Promise.race([__bridgeMod.closeRuntime(), new Promise((r) => setTimeout(r, 2000))]); } catch {}
+};
 const __run = async (prev) => {
 ${body}
 };
@@ -81,12 +89,10 @@ __run(prev)
   .then(async (out) => {
     const result = typeof out === "string" ? { message: out } : (out ?? {});
     writeFileSync(__OUT, JSON.stringify({ ...result, agentCalls: __agentCalls }));
-    try {
-      if (__bridgeMod && typeof __bridgeMod.closeRuntime === "function") await __bridgeMod.closeRuntime();
-    } catch {}
+    await __closeBridge();
     process.exit(0);
   })
-  .catch((e) => { console.error(e && e.stack ? e.stack : String(e)); process.exit(1); });
+  .catch(async (e) => { console.error(e && e.stack ? e.stack : String(e)); await __closeBridge(); process.exit(1); });
 `;
 }
 
