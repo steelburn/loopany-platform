@@ -1,7 +1,13 @@
 /**
- * `loopany log [<loop>] [--limit N] [--json]` — print how a loop's recent runs
- * actually went (status + execution transcript), so the owner's Claude Code can
- * read prior runs before editing or evolving a loop.
+ * `loopany log [<loop>] [--limit N] [--transcript] [--json]` — print how a loop's
+ * recent runs actually went, so the owner's Claude Code can read prior runs before
+ * editing or evolving a loop.
+ *
+ * The default human render is a CONCISE survey: per run just the header, session id,
+ * metrics, error, and one-line message — NOT the full clipped transcript (which is
+ * up to 8KB × N runs and buries the useful bits). The session id is the pointer to
+ * the full session JSONL for a deep dive. Pass `--transcript` (alias `--full`) to
+ * inline the clipped transcript; `--json` always returns the full structured runs.
  *
  * Like `loopany loops`/`edit`, this is an owner-OUTSIDE-a-run command: it reuses
  * the device token + server URL the daemon persisted under ~/.loopany and hits the
@@ -73,7 +79,7 @@ function seams(d: LogDeps): Seams {
 
 /** Boolean flags that never take a value — so `log --json <loop>` keeps `<loop>`
  *  as a positional instead of swallowing it as `--json`'s argument. */
-const BOOL_FLAGS = new Set(["json"]);
+const BOOL_FLAGS = new Set(["json", "transcript", "full"]);
 
 /** `--k v` pairs, bare/boolean `--flag` → true; everything else is positional. */
 function parseArgs(args: string[]): { positional: string[]; flags: Record<string, string | boolean> } {
@@ -126,8 +132,9 @@ function resolveLoopId(
   return { id: matches[0]!.l.id };
 }
 
-/** One run rendered for humans: a header line then its (clipped) transcript. */
-function formatRun(r: RunRow): string {
+/** One run rendered for humans: a concise header + session id + metrics + message
+ *  by default; the (clipped) transcript is appended only when `showTranscript`. */
+function formatRun(r: RunRow, showTranscript: boolean): string {
   const outcome = r.phase === "done" ? (r.outcome ?? "done") : r.phase;
   const dur = r.durationMs != null ? ` · ${(r.durationMs / 1000).toFixed(1)}s` : "";
   const head = `● ${r.ts}  ${r.role}  ${outcome}${dur}`;
@@ -139,7 +146,8 @@ function formatRun(r: RunRow): string {
   if (metrics.length) lines.push(`  metrics: ${metrics.join(", ")}`);
   if (r.error) lines.push(`  error: ${r.error}`);
   if (r.message) lines.push(`  ${r.message}`);
-  if (r.transcript) {
+  // The transcript is verbose (up to 8KB/run); only inline it on --transcript/--full.
+  if (showTranscript && r.transcript) {
     lines.push("");
     lines.push(r.transcript);
     if (r.transcriptTruncated) lines.push("  … (transcript truncated)");
@@ -164,6 +172,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
 
   const { positional, flags } = parseArgs(argv);
   const json = flags["json"] === true || flags["json"] === "true";
+  const showTranscript = flags["transcript"] === true || flags["full"] === true;
   const limit = typeof flags["limit"] === "string" ? flags["limit"] : undefined;
   const headers = { Authorization: `Bearer ${token}` };
 
@@ -204,7 +213,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
       d.out("no runs yet\n");
       return 0;
     }
-    d.out(`\n${data.runs.map(formatRun).join("\n\n")}\n`);
+    d.out(`\n${data.runs.map((r) => formatRun(r, showTranscript)).join("\n\n")}\n`);
     return 0;
   } catch (err) {
     d.err(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);

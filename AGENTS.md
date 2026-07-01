@@ -191,16 +191,20 @@ LLM and executes no user code**.
   the transcript flattened to text (`renderTranscript`,
   clipped to 8000 chars/run → `transcriptTruncated`). Mounted at `GET /api/machine/log?
   loopId&limit` (`routes/api.machine.log.ts`, Bearer device token). NO new auth scheme.
-  **Daemon:** `loopany log [<loop>] [--limit N] [--json]` (`log.ts`, wired in `cli.ts`
+  **Daemon:** `loopany log [<loop>] [--limit N] [--transcript] [--json]` (`log.ts`, wired in `cli.ts`
   after `down`) — an owner-outside-a-run command like `loops`/`edit` reusing the stored
   device token. It resolves which loop via the **shared `resolveLoopDir`** (extracted
   from the watcher into `loopdir.ts`, no chokidar): an explicit `<loop>` id/name wins,
   else the current cwd is matched against each loop's resolved folder (most-specific
   wins; a subdir of the workdir still matches). `listLoops` now also returns
   `workdir`/`taskFile` so the daemon can do that match. The daemon's `RunRow` carries
-  `sessionId` plus the reported metrics (`state`/`sample`), surfaced in BOTH the human render
-  (a compact `session: <id>` line and, when present, a `metrics: sample=…, <k>=<v>` line) and
-  the `--json` output. Every external touch (cwd/fetch/
+  `sessionId` plus the reported metrics (`state`/`sample`). **The default human render is a
+  CONCISE survey** — per run just the header + `session: <id>` line + (when present) a
+  `metrics: sample=…, <k>=<v>` line + error + one-line message, but **NOT** the verbose
+  transcript (up to 8KB × N runs buries the useful bits; the session id is the pointer to the
+  full session JSONL). `--transcript` (alias `--full`, both in `BOOL_FLAGS` so a positional
+  loop id isn't swallowed) inlines the clipped transcript; `--json` always returns the full
+  structured runs (transcript + sessionId + metrics) for machine consumers. Every external touch (cwd/fetch/
   out/err/server/token) is an injectable seam (`log.test.ts`, no network). The skill's
   `references/update.md` tells the agent to run `loopany log` before reshaping a loop, and
   `references/evolve.md`'s two-lens log-reading uses the returned `session` id to locate the

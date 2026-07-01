@@ -76,11 +76,38 @@ describe("runLog", () => {
     // Listed loops, then queried the resolved loop id.
     expect(calls.some((u) => u.includes("/api/machine/log?") && u.includes("loopId=loop-here"))).toBe(true);
     expect(cap.stdout()).toContain("did the thing");
-    expect(cap.stdout()).toContain("$ Bash");
     // The compact human render surfaces the session id so the reader can find the JSONL.
     expect(cap.stdout()).toContain("session: sess-r1");
     // …and the metrics the run reported, as a compact k=v line.
     expect(cap.stdout()).toContain("metrics: mrr=42");
+    // The default survey is CONCISE — the verbose transcript is NOT inlined.
+    expect(cap.stdout()).not.toContain("$ Bash");
+  });
+
+  test("--transcript (alias --full) inlines the clipped transcript", async () => {
+    const routes = {
+      "/api/machine/loop": {
+        body: { loops: [{ id: "loop-here", name: "Here", workdir: loopDir, taskFile: null }] },
+      },
+      "/api/machine/log": {
+        body: {
+          ok: true,
+          name: "Here",
+          runs: [
+            { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, sample: null, transcript: "$ Bash echo hi", transcriptTruncated: false },
+          ],
+        },
+      },
+    };
+    for (const flag of ["--transcript", "--full"]) {
+      const { fetchFn } = stubFetch(routes);
+      const cap = capture({ cwd: () => loopDir, fetchFn });
+      expect(await runLog([flag], cap)).toBe(0);
+      // With the flag the transcript is inlined; the concise fields remain.
+      expect(cap.stdout()).toContain("$ Bash");
+      expect(cap.stdout()).toContain("session: sess-r1");
+      expect(cap.stdout()).toContain("metrics: mrr=42");
+    }
   });
 
   test("a subdirectory of the loop workdir still resolves to that loop", async () => {
