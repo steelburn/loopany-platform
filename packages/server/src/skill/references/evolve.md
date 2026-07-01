@@ -17,7 +17,7 @@ Doing nothing is a valid, common outcome — pull a lever only when the log clea
 ## 1. The task — sharpen the loop's own brief  →  edit the task file on disk
 The task file (`loopany/<slug>/README.md`) is the loop's brief and running memory: `## Spec` (what it checks and when it speaks), `## Current understanding` (its live model of the world), and an append-only `## Timeline`. Normal runs keep it current by appending to the Timeline and nudging Current understanding. The evolution pass does the deeper thing a single run never steps back to do: **refactor the brief itself** against the whole recent history.
 
-Read the runs (survey with `loopany log`, deep-dive the sessions) and ask what they reveal about the Spec:
+Read the runs (survey them per the two lenses above — the inlined recent-runs for the in-run pass, deep-dive the sessions) and ask what they reveal about the Spec:
 - **Drift** — the runs keep doing something the Spec doesn't ask for, or keep ignoring something it does. Reconcile the Spec to what the loop has learned actually matters.
 - **Vagueness** — a loose instruction the agent re-interprets differently each run, so its output wanders. Tighten it into one concrete, repeatable directive.
 - **Wrong focus** — effort spent on a signal that never pays off, or the same thing rediscovered every run. Redirect the Spec to the signal that matters, and fold a settled finding up into Current understanding so runs stop re-deriving it.
