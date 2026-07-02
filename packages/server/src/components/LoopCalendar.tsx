@@ -135,13 +135,23 @@ export function LoopCalendar({
     if (newest) setShown(monthOf(productDate(newest).date))
   }, [products, selected, newest])
 
+  // The ref'd root wraps EVERY state (loading/empty/grid): the width observer
+  // attaches once on mount, so the observed element must exist on the very
+  // first render - the artifact list is null then, and a ref-less loading
+  // return would leave dot mode permanently stuck at width 0.
   if (artifacts == null)
-    return <div className="py-4 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>
+    return (
+      <div ref={rootRef} className="min-w-0">
+        <div className="py-4 font-mono text-[12px] tracking-[0.08em] text-secondary">[ loading ]</div>
+      </div>
+    )
 
   if (!products.length)
     return (
-      <div className="rounded-[10px] border border-hairline px-5 py-8 text-center text-[13px] text-disabled">
-        No products yet. Files the loop writes appear here after its next run syncs them.
+      <div ref={rootRef} className="min-w-0">
+        <div className="rounded-[10px] border border-hairline px-5 py-8 text-center text-[13px] text-disabled">
+          No products yet. Files the loop writes appear here after its next run syncs them.
+        </div>
       </div>
     )
 
