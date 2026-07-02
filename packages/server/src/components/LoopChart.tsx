@@ -106,6 +106,15 @@ export function LoopChart({
   const grid = <CartesianGrid vertical={false} stroke="var(--color-hairline)" />
   const tooltip = (
     <Tooltip
+      // No position tween: Recharts' default tooltip carries a
+      // `transition: transform 400ms`, so when the active point jumps the box
+      // SLIDES between positions. Near the chart's right edge that slide passes
+      // through an out-of-bounds spot, and because the dashboard box is
+      // `overflow-x-auto` the browser flashes a horizontal scrollbar for the
+      // ~400ms tween. Jumping straight to the final (in-viewBox, clamped)
+      // position keeps the tooltip fully visible AND never overflows the
+      // container - and matches the "fade, don't slide" motion the series use.
+      isAnimationActive={false}
       cursor={{ stroke: 'var(--color-wire)', strokeDasharray: '3 3' }}
       contentStyle={TOOLTIP_STYLE}
       labelStyle={{ color: 'var(--color-secondary)', marginBottom: 2 }}

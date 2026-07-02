@@ -59,4 +59,16 @@ describe('LoopChart container-driven sizing', () => {
   it('never reintroduces a stretched fixed viewBox', () => {
     expect(src).not.toMatch(/viewBox=/) // the attribute, not the word (comments explain the old bug)
   })
+
+  it('disables the tooltip position tween (no scrollbar flash at the chart edges)', () => {
+    // Recharts' default tooltip carries `transition: transform 400ms`, so the
+    // box SLIDES between active points. Near the right edge that slide passes
+    // through an out-of-bounds spot; since the dashboard box is
+    // `overflow-x-auto` the browser flashes a horizontal scrollbar for the
+    // tween. `isAnimationActive={false}` makes the tooltip jump straight to its
+    // clamped in-viewBox position, so it stays fully visible and never overflows.
+    const tooltip = /<Tooltip[\s\S]*?\/>/.exec(src)?.[0]
+    expect(tooltip, 'the <Tooltip/> element should exist').toBeTruthy()
+    expect(tooltip).toMatch(/isAnimationActive=\{false\}/)
+  })
 })

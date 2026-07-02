@@ -396,7 +396,22 @@ LLM and executes no user code**.
   Width containment is guarded by `dashboardArtifacts.regression.test.ts`
   (calendar `grid-cols-7` = minmax(0,1fr) tracks + `min-w-0` cells + truncating
   chips; embed wrapper-clipping; chart fixed-height ResponsiveContainer, no
-  `viewBox=`).
+  `viewBox=`). **Tooltip motion gotcha: the `<Tooltip>` sets
+  `isAnimationActive={false}`.** Recharts' default tooltip carries an inline
+  `transition: transform 400ms`, so when the active point changes the box SLIDES
+  from its old spot to the new (clamped, in-viewBox) one. On the loop detail page
+  the chart's right edge coincides with the `min-w-0 overflow-x-auto` dashboard
+  box's right edge, so mid-slide near the last data point the tooltip momentarily
+  sits out of bounds and the browser flashes a horizontal scrollbar for the whole
+  ~400ms tween (verified E2E: a real hover over the rightmost point measured
+  `scrollWidth − clientWidth = 38px` during the slide, `0` after it settled). The
+  settled tooltip already clamps inside the chart at every edge, so disabling the
+  position tween (jump, don't slide - matching the series' own
+  `isAnimationActive:false` and the Nothing "fade, don't slide" motion) fixes the
+  flash without clipping the tooltip. Do NOT reach for `overflow:hidden` on the
+  chart box - `overflow-x:hidden` forces `overflow-y:auto`, which would clip the
+  tooltip vertically at the top/bottom edges. Guarded by the regression test
+  (`isAnimationActive={false}` present on `<Tooltip>`).
 - Server route files use `createFileRoute(path).server.handlers`; heavy/native
   imports are **dynamic-imported inside handlers** to stay out of the client bundle.
 - Prod: nitro build → `pnpm start` = `drizzle-kit migrate` then `node .output/server/index.mjs`.
