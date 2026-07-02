@@ -134,7 +134,7 @@ LLM and executes no user code**.
   daemon needs NO change to compose it: `delivery.task` IS the trigger, so the workflow escalation
   (`${d.task}\n\nworkflow signal:…`) and `buildWorkflowFallbackTask(d.task,…)` already embed it.
   **`exec-trigger.md` is minimal + neutral ON PURPOSE — batch 3 owns the polished prose there.**
-  **Daemon CLI (breaking, next version — no users):** `loopany new --json '<inline>'` (or `--json -`
+  **Daemon CLI (breaking, daemon 0.8.0 — no users):** `loopany new --json '<inline>'` (or `--json -`
   reads stdin) REPLACES `--config <file>`; `loopany edit` slims to **JSON-only + the content trio**
   (`--json '<obj>'`, `--workflow-file`, `--ui-file`, `--schema-file`) — every scalar envelope flag
   (`--cron/--tz/--name/--notify/--model/--pause/--resume/--run-at/--task-file`) AND `--json-file`
