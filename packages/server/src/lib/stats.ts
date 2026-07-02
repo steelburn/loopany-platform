@@ -30,6 +30,32 @@ export function numericSeries(runsNewestFirst: RunSummary[]): Record<string, Ser
   return series
 }
 
+/**
+ * One Recharts data row: the run timestamp plus each requested metric present
+ * at it. The timestamp field is `__t` (not `t`) so a loop whose declared state
+ * key is literally `t` can't overwrite it.
+ */
+export interface SeriesRow {
+  __t: string
+  [key: string]: string | number
+}
+
+/**
+ * Merge per-key series into the row-oriented array Recharts consumes
+ * (`[{__t, k1, k2}, …]`, chronological). Rows are the union of the requested
+ * keys' timestamps - a run that reported only some keys leaves the others
+ * absent on that row (the chart bridges the gap via `connectNulls`).
+ */
+export function seriesRows(data: Record<string, SeriesPoint[]>, keys: string[]): SeriesRow[] {
+  const ts = new Set<string>()
+  for (const k of keys) for (const p of data[k] ?? []) ts.add(p.t)
+  const sorted = [...ts].sort() // ISO timestamps - lexical order IS chronological
+  const idx = new Map(sorted.map((t, i) => [t, i]))
+  const rows: SeriesRow[] = sorted.map((t) => ({ __t: t }))
+  for (const k of keys) for (const p of data[k] ?? []) rows[idx.get(p.t)!]![k] = p.v
+  return rows
+}
+
 /** Min/max of a value set, with a non-zero span (`hi - lo || 1`) for safe scaling. */
 export function bounds(values: number[]): { lo: number; hi: number; sp: number } {
   let lo = Infinity,
