@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, it, expect, vi } from 'vitest'
 import { LoopView } from './LoopView'
+import { getArtifacts } from '../server/loopApi'
 import type { RunSummary } from '../types'
 
 // The artifact-list fetch resolves empty so mounted embed/calendar tests can
@@ -120,5 +121,27 @@ describe('LoopView artifact primitives', () => {
     const out = await mount('<LOOP-EMBED match="reports/*.md"></LOOP-EMBED>')
     expect(out).not.toContain('[ loading ]')
     expect(out).toContain('No synced file matches yet')
+  })
+
+  it('re-fetches artifacts when the newest run settles (not only when a new run id appears)', async () => {
+    // A run's files land on its FINAL sync, so keying the fetch on the run id
+    // alone would show run N's output only once run N+1 starts.
+    const embed = '<loop-embed match="reports/*.md"></loop-embed>'
+    const live = { ...mk('2026-06-20T14:00:00.000Z', null), running: true }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    vi.mocked(getArtifacts).mockClear()
+    await act(async () => {
+      root.render(createElement(LoopView, { html: embed, runs: [live, ...RUNS], loopId: 'loop-1' }))
+    })
+    expect(vi.mocked(getArtifacts)).toHaveBeenCalledTimes(1)
+    const settled = { ...live, running: false }
+    await act(async () => {
+      root.render(createElement(LoopView, { html: embed, runs: [settled, ...RUNS], loopId: 'loop-1' }))
+    })
+    expect(vi.mocked(getArtifacts)).toHaveBeenCalledTimes(2)
+    await act(async () => root.unmount())
+    host.remove()
   })
 })

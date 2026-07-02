@@ -85,12 +85,15 @@ export function LoopView({
 
   // The artifact-backed primitives share ONE lazy artifact-list fetch - made
   // only when the template actually uses them, so a chart-only dashboard pays
-  // nothing. Refreshed when the newest run changes (new run ⇒ likely new files).
+  // nothing. Refreshed when the newest run changes (new run ⇒ likely new files)
+  // AND when that run settles (its final sync is what lands the new files -
+  // keying on the id alone would show run N's output only once run N+1 starts).
   // Detected on the SANITIZED html: DOMPurify lowercases tag names, so this
   // also catches uppercase-authored tags and tags materialized by bindings.
   const wantsArtifacts = /<loop-(embed|calendar)\b/.test(clean)
   const [artifacts, setArtifacts] = useState<ArtifactSummary[] | null>(null)
   const newestRunId = runs[0]?.id
+  const newestRunLive = runs[0]?.running === true
   useEffect(() => {
     if (!wantsArtifacts) return
     let alive = true
@@ -100,7 +103,7 @@ export function LoopView({
     return () => {
       alive = false
     }
-  }, [wantsArtifacts, loopId, newestRunId])
+  }, [wantsArtifacts, loopId, newestRunId, newestRunLive])
 
   const options: HTMLReactParserOptions = useMemo(
     () => ({
