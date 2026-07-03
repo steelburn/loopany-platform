@@ -83,6 +83,37 @@ describe('LoopKanban grouping', () => {
     expect(out).toContain('Typo') // never silently dropped
   })
 
+  it('de-duplicates repeated column names so a typo renders one column', async () => {
+    const el = await mount({
+      ...base,
+      columns: 'research,research,done',
+      artifacts: [file('notes/a.md', { type: 'research', title: 'Alpha' })],
+    })
+    const out = el.innerHTML
+    // Exactly one 'research' column header (dedup), not two.
+    expect(out.split('research').length - 1).toBe(1)
+    // The single Alpha card is not duplicated across two columns.
+    expect(out.split('Alpha').length - 1).toBe(1)
+  })
+
+  it('keeps a declared Other column separate from the automatic overflow bucket', async () => {
+    const el = await mount({
+      ...base,
+      columns: 'research,Other',
+      artifacts: [
+        file('notes/a.md', { type: 'Other', title: 'Declared' }), // declared 'Other' column
+        file('notes/typo.md', { type: 'reserch', title: 'Overflowed' }), // no column → overflow
+      ],
+    })
+    const out = el.innerHTML
+    // The declared card stays in its column and the overflow card is not merged into it.
+    expect(out).toContain('Declared')
+    expect(out).toContain('Overflowed')
+    // Neither card is duplicated by an 'Other' key collision.
+    expect(out.split('Declared').length - 1).toBe(1)
+    expect(out.split('Overflowed').length - 1).toBe(1)
+  })
+
   it('falls back to the filename when no title is set, and ignores untyped products', async () => {
     const el = await mount({
       ...base,

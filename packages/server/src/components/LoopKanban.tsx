@@ -34,6 +34,12 @@ import { CollapsibleBody } from './LoopEmbed'
  */
 
 const OVERFLOW_LABEL = 'Other'
+/** Bucket key for the automatic overflow column. A unique Symbol (not the display
+ *  string) so it can never collide with an author-declared column named 'Other'. */
+const OVERFLOW_KEY: unique symbol = Symbol('kanban-overflow')
+/** React key for the overflow row. Column names are comma-split, so a name can
+ *  never contain a comma - this sentinel cannot collide with a declared column. */
+const OVERFLOW_REACT_KEY = 'overflow,'
 
 interface Card {
   file: ArtifactSummary
@@ -65,10 +71,14 @@ export function LoopKanban({
   taskFile?: string
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
-  const cols = (columns ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
+  const cols = [
+    ...new Set(
+      (columns ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ]
   const shell = 'min-w-0'
 
   // Authoring hint - an agent iterating on its template sees why nothing shows.
@@ -95,10 +105,10 @@ export function LoopKanban({
 
   // Group into declared columns (exact `type` match); unmatched types overflow.
   const declared = new Set(cols)
-  const grouped = new Map<string, Card[]>()
+  const grouped = new Map<string | symbol, Card[]>()
   for (const card of cards) {
     const type = card.file.meta!.type!.trim()
-    const key = declared.has(type) ? type : OVERFLOW_LABEL
+    const key: string | symbol = declared.has(type) ? type : OVERFLOW_KEY
     const list = grouped.get(key) ?? []
     list.push(card)
     grouped.set(key, list)
@@ -106,7 +116,7 @@ export function LoopKanban({
   for (const list of grouped.values()) list.sort((a, b) => (sortKey(a) < sortKey(b) ? 1 : -1))
 
   const board = cols.map((name) => ({ name, cards: grouped.get(name) ?? [], overflow: false }))
-  const overflow = grouped.get(OVERFLOW_LABEL) ?? []
+  const overflow = grouped.get(OVERFLOW_KEY) ?? []
   if (overflow.length) board.push({ name: OVERFLOW_LABEL, cards: overflow, overflow: true })
 
   return (
@@ -115,7 +125,7 @@ export function LoopKanban({
     // pane, and the columns are shrink-0 fixed-width tracks.
     <div className={`${shell} flex gap-3 overflow-x-auto pb-1`}>
       {board.map((col) => (
-        <div key={col.name} className="flex w-[248px] shrink-0 flex-col">
+        <div key={col.overflow ? OVERFLOW_REACT_KEY : col.name} className="flex w-[248px] shrink-0 flex-col">
           <div className="mb-2 flex items-center gap-2 border-b border-hairline pb-1.5">
             <span
               className={`font-mono text-[11px] tracking-[0.06em] ${
