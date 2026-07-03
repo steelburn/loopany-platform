@@ -234,6 +234,55 @@ describe("runDelivery — a timed-out run keeps its session pointer", () => {
   }, 30000);
 });
 
+describe("runDelivery — the exec timeout is opt-in (unlimited by default)", () => {
+  test("with LOOPANY_EXEC_TIMEOUT_MS unset, no timer is armed — a slow claude completes ok", async () => {
+    // Fresh runner import so the module-load timeout read sees the env UNSET (0 ⇒ unlimited).
+    vi.resetModules();
+    delete process.env.LOOPANY_EXEC_TIMEOUT_MS;
+    const { runDelivery: run } = await import("./runner.js");
+
+    // A fake claude that sleeps well past the old default (and past the 1500ms override
+    // used in the timeout test) before finishing cleanly. If a timer were armed by default
+    // this would report a timeout; with no timer it reports a normal success.
+    const bin = path.join(root, "slow-ok-claude.sh");
+    fs.writeFileSync(
+      bin,
+      [
+        "#!/bin/sh",
+        `echo '{"type":"system","session_id":"sess-unlimited"}'`,
+        "sleep 2",
+        `echo '{"type":"result","is_error":false,"subtype":"success","result":"delivered","session_id":"sess-unlimited"}'`,
+        "exit 0",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(bin, 0o755);
+    process.env.LOOPANY_CLAUDE_BIN = bin;
+
+    const reports: any[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        reports.push(JSON.parse(body));
+        res.end("{}");
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    try {
+      const port = (srv.address() as AddressInfo).port;
+      await run(delivery({ loop: { ...delivery().loop, workflow: null } }), `http://127.0.0.1:${port}`, []);
+    } finally {
+      srv.close();
+    }
+    const rep = reports.find((r) => r.runId === "run-1");
+    expect(rep).toBeTruthy();
+    expect(rep.ok).toBe(true);
+    expect(rep.error).toBeUndefined();
+  }, 30000);
+});
+
 describe("runDelivery — the local LOOPANY_ROOTS jail always applies", () => {
   test("server-sent roots cannot WIDEN the jail to admit an out-of-jail workdir (claude never runs)", async () => {
     process.env.LOOPANY_CLAUDE_BIN = writeFakeClaude();

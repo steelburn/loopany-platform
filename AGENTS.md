@@ -358,6 +358,16 @@ LLM and executes no user code**.
   run **keeps its `sessionId`** (parsed from the streamed events before the kill) so the transcript
   stays locatable. The local cron pre-check in `loopany new` accepts 5- and 6-field expressions
   plus `@`-shortcuts (`@daily` …) - the server stays the sole judge.
+- **Exec-timeout is opt-in (unlimited by default).** The coding-agent (claude) child in
+  `runner.ts` runs with NO wall-clock timeout by default — `TIMEOUT_MS` is derived from
+  `LOOPANY_EXEC_TIMEOUT_MS` (module-load read): a **positive** number arms the timer, and
+  unset/`0`/invalid/negative ⇒ `0` ⇒ unlimited (`runProcess`/`spawn.ts` treat a falsy/`≤0`
+  `timeoutMs` as "no timer armed"). The old 15-minute (900s) default was removed: a real run can
+  legitimately run long, and the guard against a machine that disappears is the SERVER's
+  inactivity-based sweep (`RUN_TIMEOUT_MS` over the poll freshness stamp), not a daemon-side
+  wall clock. The `claude timed out (Ns)` message derives N from the effective limit (only
+  reachable when a limit is set); the "keep `sessionId` on timeout" recovery is unchanged.
+  Covered by `runner.test.ts` (set ⇒ times out + keeps session; unset ⇒ slow claude completes ok).
 - **Run-log read endpoint + `loopany log` (daemon 0.6.0).** The on-machine agent can
   pull a loop's recent run **transcripts** so create/update/evolve aren't blind to how
   past runs went. The transcript used to be web-UI-only (`getTranscript` server fn).
