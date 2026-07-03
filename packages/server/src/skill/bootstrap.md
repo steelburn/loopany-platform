@@ -24,6 +24,10 @@ The user pasted these along with the capture link — use them verbatim:
   **If it's not pasted, use `npx @crewlet/loopany@latest`.** (A dev server may paste
   a local command instead.)
 
+The paste may also carry a short **task description** below those values — the user
+started from a template card on the dashboard. That description is the loop to build;
+the create reference (step 2) treats it as the intent.
+
 ## 1 · Connect this machine
 
 One idempotent command does the whole thing — run it verbatim (substitute

@@ -92,6 +92,39 @@ computes pure functions. Run instructions: `README.md`.
   prompt-only `.md` edit MUST deploy (`deploy.yml` paths-ignore lists explicit doc
   paths, deliberately not a wholesale `**/*.md`).
 
+## Template market (`packages/server/src/skill/templates/`)
+
+- A template is a **canned loop INTENT, not a flow** - metadata only. There is NO
+  template serving endpoint and NO per-template doc: all loop-building intelligence
+  stays in `bootstrap.md` + `references/create.md` (propose-then-confirm cadence,
+  config, dashboard authoring). The template just seeds the natural-language intent.
+- Each template is a **folder** under `skill/templates/<name>/` with a single static
+  `meta.json` (the `TemplateInfo`: `name`, `label`, `desc` = one-line card blurb,
+  `description` = the canned task text appended to the snippet). Zero-exec, file-based.
+- **Adding a template is pure content addition - no code change.** The registry
+  (`server/templates.ts`) builds `TEMPLATES` from an `import.meta.glob` over `meta.json`;
+  `listTemplates` returns it. Drop a new folder; the registry test (a non-empty
+  `desc`/`description` per entry) covers it automatically.
+- **Dashboard entry**: the template cards render directly beside "New Loop"
+  (`routes/index.tsx`, `templates.map`). One click opens `ComposeModal` with that
+  `template` - it skips the host chooser, goes straight to the snippet, and appends the
+  template's `description` under the config lines. `ComposeModal` handles BOTH blank
+  loops (`template = null`, the two-step rail) and templates (`template` set) - there is
+  no separate modal. Snippet form:
+  `Fetch <origin>/api/bootstrap and help me build a loop.` + `server-url`/`connect-key` +
+  a blank line + the `description`. Same connect-key machinery as a blank loop
+  (`mintClaim`/`getConfig`/`claimStatus`).
+- **PUBLIC but NOT bundled.** `meta.json` rides to the client via `listTemplates`, and
+  `sync-skill.mjs`'s whitelist stays selective (`skill/templates/` never ships in the
+  daemon npm tarball; guarded by `sync-skill.test.ts`).
+- v1 ships one template (React Doctor). Its `description` is a short English paragraph:
+  daily ~6am `npx react-doctor@latest`, fix the single worst issue in a fresh worktree
+  off `main` (never dirty the checkout), PR via gh, no-stacking while a prior PR is
+  unmerged (still refresh status + score), one `type: open|merged` markdown card per PR
+  for the kanban, daily health score, and a **day-one dashboard set up at creation**
+  (kanban + score chart, via the create-`ui` support - see "Server gotchas"). Keep it
+  tight - no react-doctor flags beyond the npx one-liner. English only.
+
 ## Workflows (deterministic pre-stage)
 
 - A loop's workflow is an **async function body, NOT an ES module**: top-level
@@ -189,6 +222,17 @@ computes pure functions. Run instructions: `README.md`.
   `EDITABLE_LOOP_FIELDS` are rejected with a 400 listing the allowed set. Both
   `loopany new` and `loopany edit` support `--dry-run` (server validate-only, zero
   persistence).
+- **`createLoop` also accepts an optional `ui`** (gateway `createLoop`, same
+  `validateUi` + `WIRE_TEXT_CAP` clip as `set-ui`/`editLoop`), so a template-driven
+  loop ships a **day-one dashboard** instead of waiting for an evolve pass. The daemon
+  `loopany new` spreads the whole `--json` config, so `ui` passes through with no
+  whitelist change; `--dry-run` reports `ui` as a presence flag (like `workflow`), not
+  the markup. `create.md`'s "Dashboard at create" step tells the agent to author the
+  initial `ui` when the product shape is already known (cross-refs `evolve.md` §3).
+  **A dropped dashboard is never silent**: the REAL create response echoes `ui`
+  presence (and the CLI prints `dashboard ui: applied|not applied`), and when a
+  provided `ui` validated to null the response carries a `warning` that the CLI shouts
+  to stderr — create still succeeds, just without a dashboard.
 - `describe()`/`validCadence` probe crons in the LOOP's timezone (fire times shift
   with it).
 

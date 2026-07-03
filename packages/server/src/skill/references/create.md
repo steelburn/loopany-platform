@@ -14,6 +14,10 @@ pick the starting point:
   finished something and want it to keep happening). Turn *that task* into the loop:
   recap it in one line, then build around the real URLs, paths, commands, and
   thresholds from what you just did together.
+- **The capture snippet itself carries a task description** (the user started from a
+  template card on the dashboard). That description IS the intent — build exactly
+  that loop, grounded in this project's real paths and commands, and still confirm
+  anything it leaves open in §2.
 - **There's no task yet** (the session is essentially empty). **Don't invent a loop
   from thin air.** Look at what *this project actually is* (its README, its code,
   its purpose), brainstorm a few concrete loops that would be useful FOR IT, and let
@@ -162,6 +166,7 @@ file to write. Only the loop's real intent goes in it; the CLI fills the envelop
   "workdir": "<absolute project dir>",
   "taskFile": "<absolute path to the task file above>",
   "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
+  "ui": "<small dashboard HTML — optional; see 'Dashboard at create' below>",
   "notify": "auto"
 }
 ```
@@ -174,12 +179,26 @@ Rules:
 - **`goal` makes the loop closed**: with a goal set, each run judges it and calls
   `loopany finish` when met, ending the loop. Omit `goal` for a monitor/digest loop
   that runs indefinitely (§2).
-- `stateSchema` is optional — declare numeric per-run metrics to get a chart. (The
-  dashboard itself is usually left to a later evolve pass — see `evolve.md` §3.)
+- `stateSchema` is optional — declare numeric per-run metrics to get a chart.
+- `ui` is optional — the loop's dashboard panel as small HTML (see **Dashboard at
+  create** below).
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
 - **Don't add `timezone`, `claim`, or any auth** — `loopany new` injects the
   timezone, the connect-key claim, and this machine's device token. (If the user
   states a different zone, pass `--tz <IANA>` in §5.)
+
+### Dashboard at create — when the product shape is already known
+
+The dashboard is usually left to a later evolve pass, but when you ALREADY know the
+loop's product shape at create time — a template-driven loop, or any loop whose Spec
+fixes the artifacts/metrics up front — author the initial `ui` NOW and include it in
+the config, so the loop has a day-one dashboard instead of a blank one until it
+evolves. Use the same panel primitives and `{{latest.<key>}}` bindings documented in
+`evolve.md` §3 (`<loop-chart>` for a metric trend, `<loop-kanban>`/`<loop-embed>`/
+`<loop-calendar>` for the loop's typed products) — don't duplicate that guidance here;
+just bind only keys your `stateSchema` declares and columns your Spec's `type`
+vocabulary uses. Keep it small. Skip it when the product shape isn't settled yet — a
+speculative dashboard is worse than none.
 
 ## 5 · Validate, then create
 
@@ -192,9 +211,11 @@ classification, persisting nothing:
 ```
 
 Check the classification matches your intent (a `goal` → `closed: will self-finish`;
-no goal → `open: runs until paused`) and the fire times look right. Then create for
-real — pass the connect-key so the web dialog learns the loop was created, and
-declare which coding agent you are:
+no goal → `open: runs until paused`) and the fire times look right. `workflow` and
+`ui` are echoed as presence flags (`yes`/`no`), not their source — if you authored a
+`ui` and the preview says `ui: no` (plus a warning), it validated to nothing; fix the
+HTML before creating. Then create for real — pass the connect-key so the web dialog
+learns the loop was created, and declare which coding agent you are:
 
 ```bash
 <loopany-cli> new \
@@ -206,9 +227,12 @@ declare which coding agent you are:
 `loopany new` detects the IANA timezone, injects the claim, records the coding agent
 (the `--agent` you pass, or — preferred — the host it sniffs from its own env),
 authenticates, validates, and POSTs it. On success it prints `created loop <name> —
-<cron> <timezone>`; the loop now appears in the web UI and runs on schedule. (For a
-large inline config, `--json -` reads it from stdin.) On `loopany: <error>`, fix the
-config and re-run.
+<cron> <timezone>`; the loop now appears in the web UI and runs on schedule. If the
+config carried a `ui`, it also prints `dashboard ui: applied` — `not applied` plus a
+`loopany: warning:` means the dashboard was dropped (the loop was still created);
+fix the HTML and push it with `loopany edit <id> --ui-file <path>` (`update.md`).
+(For a large inline config, `--json -` reads it from stdin.) On `loopany: <error>`,
+fix the config and re-run.
 
 Finally, tell the user it's created (name + cadence) and that the first run comes
 automatically shortly — point them at the Loopany web UI to watch for the result.

@@ -421,6 +421,10 @@ export class MachineGateway {
       workdir?: unknown;
       taskFile?: unknown;
       stateSchema?: unknown;
+      /** Optional initial dashboard UI (small HTML, same surface as `set-ui`). Lets a
+       *  template-driven loop ship a day-one dashboard instead of waiting for an
+       *  evolve pass. Validated by the same `validateUi` editLoop uses. */
+      ui?: unknown;
       notify?: unknown;
       /** Optional closed-loop setpoint. Non-null ⇒ the loop is CLOSED (self-finishes
        *  when met); null/absent ⇒ OPEN (monitor/digest). */
@@ -477,6 +481,16 @@ export class MachineGateway {
     const agent: CodingAgent = body.agent === "codex" ? "codex" : "claude-code";
 
     const stateSchema = store.coerceStateSchema(body.stateSchema) ?? null;
+    // Optional day-one dashboard — same validate/clip surface as `set-ui` (editLoop).
+    // Sanitized to the allowed tags/attrs; an unusable value coerces to null.
+    const ui = this.validateUi(str(body.ui)?.slice(0, WIRE_TEXT_CAP) ?? "").value;
+    // A dashboard the caller PROVIDED but that validated to nothing must never vanish
+    // silently — surface it (dry-run + real create) so a dropped dashboard is LOUD.
+    // The create still succeeds; the loop just has no dashboard until it's fixed.
+    const uiDropped = body.ui != null && body.ui !== "" && ui == null;
+    const uiWarning = uiDropped
+      ? "the provided ui was empty after validation and was NOT applied — the loop was created without a dashboard"
+      : undefined;
 
     // Validate-only (`loopany new --dry-run`): every check above has passed, so
     // return the normalized config + fire preview + open/closed classification and
@@ -495,6 +509,8 @@ export class MachineGateway {
             workdir: str(body.workdir) ?? null,
             // The workflow JS body can be large — report presence, not the source.
             workflow: workflow != null,
+            // Ditto for the dashboard HTML — presence flag, not the markup.
+            ui: ui != null,
             goal,
             notify,
             agent,
@@ -507,6 +523,7 @@ export class MachineGateway {
             goal != null
               ? "closed (has goal): will self-finish when the goal is met"
               : "open: runs until paused",
+          ...(uiWarning ? { warning: uiWarning } : {}),
         },
       };
     }
@@ -554,6 +571,7 @@ export class MachineGateway {
       workdir: str(body.workdir),
       taskFile,
       stateSchema,
+      ui,
       notify,
       goal,
       agent,
@@ -567,8 +585,11 @@ export class MachineGateway {
     if (typeof body.claim === "string" && body.claim.trim()) {
       fulfillClaim(body.claim.trim(), { loopId: loop.id, name, machineId, agent });
     }
-    log.info({ machineId, loopId: loop.id, agent }, "createLoop: created from a coding agent");
-    return { status: 200, body: { ok: true, id: loop.id, name } };
+    if (uiDropped) log.warn({ machineId, loopId: loop.id }, "createLoop: provided ui dropped — loop created without a dashboard");
+    log.info({ machineId, loopId: loop.id, agent, ui: ui != null }, "createLoop: created from a coding agent");
+    // Echo `ui` presence (like dry-run) + a warning when a provided dashboard was
+    // dropped, so the CLI/response can surface it — never a silent no-dashboard.
+    return { status: 200, body: { ok: true, id: loop.id, name, ui: ui != null, ...(uiWarning ? { warning: uiWarning } : {}) } };
   }
 
   // ---- GET/PATCH /api/machine/loop — the owner's interactive agent edits ----

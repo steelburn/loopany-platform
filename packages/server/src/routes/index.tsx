@@ -82,6 +82,8 @@ function Dashboard() {
   const { jobs, templates, machines, teams } = data
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
+  // Compose carries an optional template: null = blank New Loop; a TemplateInfo =
+  // a canned intent picked from the cards (ComposeModal appends its description).
   const [compose, setCompose] = useState<{ open: boolean; template: TemplateInfo | null }>({
     open: false,
     template: null,
@@ -165,7 +167,8 @@ function Dashboard() {
           </div>
         </header>
 
-        {/* toolbar: New Loop + template tiles */}
+        {/* toolbar: New Loop + template cases (canned intents) rendered beside it —
+            one click on a card goes straight to its snippet. */}
         <div className="flex flex-wrap items-stretch gap-3">
           <button
             onClick={() => setCompose({ open: true, template: null })}
@@ -178,10 +181,10 @@ function Dashboard() {
             <button
               key={t.name}
               onClick={() => setCompose({ open: true, template: t })}
-              className="min-w-[200px] flex-1 cursor-pointer rounded-lg border border-wire bg-surface px-5 py-4 text-left transition-colors hover:border-display"
+              className="flex min-w-0 max-w-72 flex-1 cursor-pointer flex-col justify-center gap-1 rounded-lg border border-wire bg-surface px-5 py-4 text-left transition-colors hover:border-display"
             >
-              <div className="mb-1.5 text-[15px] font-medium text-display">{t.label}</div>
-              <div className="text-[13px] leading-snug text-secondary">{t.desc}</div>
+              <span className="text-[14px] font-medium text-display">{t.label}</span>
+              <span className="text-[12.5px] leading-snug text-secondary">{t.desc}</span>
             </button>
           ))}
         </div>
@@ -231,6 +234,7 @@ function Dashboard() {
 
       <ComposeModal
         open={compose.open}
+        template={compose.template}
         onClose={() => setCompose({ open: false, template: null })}
         onCreated={refresh}
       />

@@ -6,11 +6,13 @@
  *
  * SELECTIVE COPY — only the PUBLIC skill surface ships: SKILL.md (installable skill
  * root) + the references/ authoring trio (create/update/evolve). The INTERNAL run
- * prompts under skill/run/ (exec-loop, edit) are server-side run-dispatch ONLY, and
+ * prompts under skill/run/ (exec-loop, edit) are server-side run-dispatch ONLY,
  * bootstrap.md is the SERVER-ONLY first-capture onboarding doc served at /api/skill
- * (not an installable skill file) — none of these may reach the public npm tarball or
- * a user's installed ./.claude/skills/loopany/. A naive `cpSync(src, dst, {recursive})`
- * would copy run/ AND bootstrap.md too — so we whitelist instead.
+ * (not an installable skill file), and skill/templates/ is the template-market
+ * metadata (public-served via listTemplates, not an installable skill file) — none of
+ * these may reach the public npm tarball or a user's installed
+ * ./.claude/skills/loopany/. A naive `cpSync(src, dst, {recursive})` would copy run/,
+ * bootstrap.md AND templates/ too — so we whitelist instead.
  *
  * The daemon installs this bundled dir locally via `npx skills` during `loopany new`
  * (see src/skill-install.ts) — a LOCAL path source, so end users never need the
