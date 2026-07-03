@@ -64,7 +64,13 @@ interface ReportBody {
 const TASKFILE_CAP = 256 * 1024;
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
-const TIMEOUT_MS = Number(process.env.LOOPANY_EXEC_TIMEOUT_MS || 15 * 60_000);
+// The coding-agent child runs with NO wall-clock timeout by default — a real run
+// can legitimately take a long time, and the server's inactivity-based sweep is the
+// guard against a machine that disappears. `LOOPANY_EXEC_TIMEOUT_MS` is an opt-in
+// override: a positive number arms the timer; unset/0/invalid/negative ⇒ unlimited
+// (runProcess treats a falsy/≤0 timeoutMs as "no timeout").
+const rawExecTimeout = Number(process.env.LOOPANY_EXEC_TIMEOUT_MS);
+const TIMEOUT_MS = Number.isFinite(rawExecTimeout) && rawExecTimeout > 0 ? rawExecTimeout : 0;
 /** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
 const FLUSH_TIMEOUT_MS = 2500;
 
