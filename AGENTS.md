@@ -282,16 +282,12 @@ LLM and executes no user code**.
   temp dir); LOCAL path source ⇒ end users never need the private platform repo. Both paths are
   **announced** (one status line) and **never block/fail** their command; any failure (no
   network/npx, no write perm, bundled skill absent) degrades silently to the always-working
-  `/api/skill` path. **Stale per-workdir cleanup** (`WatchManager.reconcile`, `watcher.ts`):
-  an old `<loopDir>/.claude/skills/loopany` project copy would SHADOW the user-scope skill
-  (project scope wins in Claude Code discovery) and go stale, so on the first poll a loop's
-  folder is resolved (`resolveLoopDir`) the watcher best-effort removes it — `removeStaleProjectSkill(dir)`,
-  guarded to only delete a dir confirmed OURS (`isOurSkillDir`: a `SKILL.md` whose frontmatter
-  declares `name: loopany`), run AFTER the `LOOPANY_ROOTS` jail check (so an out-of-jail folder
-  is never touched), once per loop per daemon lifetime (`staleSkillCleaned` Set), quiet + never
-  fails the poll. `installSkill()` takes an injectable `Runner` and `runCreate`/`runEnsure` take
-  injectable installer seams, so tests need no network/npx (`skill-install.test.ts`,
-  `create.test.ts`, `ensure.test.ts`, `watcher.test.ts`). **Web-created loops** (New-loop dialog,
+  `/api/skill` path. **Caveat — no auto-cleanup of stale per-workdir copies:** a PRE-EXISTING
+  `<workdir>/.claude/skills/loopany` copy left by the old project-scope installer is NOT
+  auto-removed and must be deleted by hand, or it shadows the user-scope skill (project scope
+  wins in Claude Code discovery). `installSkill()` takes an injectable `Runner` and
+  `runCreate`/`runEnsure` take injectable installer seams, so tests need no network/npx
+  (`skill-install.test.ts`, `create.test.ts`, `ensure.test.ts`). **Web-created loops** (New-loop dialog,
   no local `loopany new`) still rely on `loopany up`'s refresh (or the always-working `/api/skill`
   path). Thin verb `loopany skill {status,install}` (`skill-cli.ts`) is the **manual escape
   hatch** — install defaults to user scope (`-g`/`--global` accepted but redundant); `--project`

@@ -15,7 +15,9 @@
  * deliberate reintroduction of skill logic into `up`: 0.4.0 removed it because the
  * old PROJECT-scope install would pollute an arbitrary cwd `up` might run from; user
  * scope has no such hazard (it targets the home dir regardless of cwd), so `up` is
- * the natural refresh point. It's announced in one line and NEVER blocks/fails up.
+ * the natural refresh point. It's announced in one line and NEVER fails up (it is
+ * awaited, so on a cold `npx` it can delay up's return up to the install timeout,
+ * but it can never change up's outcome).
  *
  * Every external touch (status fetch, spawn, kill, sleep, pidfile check, skill
  * refresh, persistence, output) is an injectable seam so tests need no process/network.
@@ -97,7 +99,8 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}): Prom
   };
 
   /** Best-effort user-scope skill refresh — announced in one line, never throws,
-   *  never changes the up outcome. Called on every success path. */
+   *  never fails up (it is awaited, so it can delay up's return on a cold npx, but
+   *  never changes the up outcome). Called on every success path. */
   const refreshSkill = async (): Promise<void> => {
     try {
       const r = await d.installSkill({ global: true });

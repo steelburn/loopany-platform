@@ -24,6 +24,11 @@
  * `--copy` makes a self-contained copy, no symlink into this package's temp dir).
  * Dropping `-g` (the `--project` escape hatch) installs into the runner's cwd →
  * <cwd>/.claude/skills/loopany/.
+ *
+ * CAVEAT: a PRE-EXISTING per-workdir `<workdir>/.claude/skills/loopany` copy left
+ * behind by the old project-scope installer is NOT auto-removed — it must be deleted
+ * BY HAND, or it shadows the user-level skill (project scope wins in Claude Code
+ * discovery).
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -158,53 +163,4 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
 
 function firstLine(s: string): string {
   return (s || "").trim().split("\n")[0]?.trim() ?? "";
-}
-
-/**
- * The exact path our OLD (pre-user-scope) project installer created inside a loop
- * folder. Now that the skill lives at USER scope, any leftover copy here would
- * SHADOW it (project scope wins in Claude Code discovery) and go stale — so the
- * daemon best-effort removes it (see removeStaleProjectSkill).
- */
-export function projectSkillDir(loopDir: string): string {
-  return path.join(loopDir, ".claude", "skills", "loopany");
-}
-
-/** Read the `name:` from a SKILL.md's leading YAML frontmatter (`--- … ---`), or
- *  undefined when there's no frontmatter / no name. */
-function skillFrontmatterName(md: string): string | undefined {
-  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(md);
-  if (!block) return undefined;
-  return /^\s*name:\s*(.+?)\s*$/m.exec(block[1])?.[1];
-}
-
-/**
- * True iff `dir` looks like a loopany skill install WE created — a SKILL.md whose
- * frontmatter declares `name: loopany`. The guard keeps the stale-copy cleanup from
- * ever deleting a dir that isn't ours (even though only our installer ever produces
- * this exact `.claude/skills/loopany` path). Never throws.
- */
-export function isOurSkillDir(dir: string): boolean {
-  try {
-    return skillFrontmatterName(fs.readFileSync(path.join(dir, "SKILL.md"), "utf8")) === "loopany";
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Best-effort removal of a stale per-workdir loopany skill copy that would now
- * SHADOW the user-level install. Quiet + never throws; only deletes when the dir is
- * confirmed OURS (isOurSkillDir). Returns true iff a copy was actually removed.
- * Callers must have already applied the LOOPANY_ROOTS jail to `loopDir`.
- */
-export function removeStaleProjectSkill(loopDir: string): boolean {
-  const dir = projectSkillDir(loopDir);
-  if (!isOurSkillDir(dir)) return false;
-  try {
-    fs.rmSync(dir, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
-  }
 }
