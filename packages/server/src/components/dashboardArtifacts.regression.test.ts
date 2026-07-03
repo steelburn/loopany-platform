@@ -47,6 +47,29 @@ describe('LoopEmbed collapse containment', () => {
   })
 })
 
+describe('LoopKanban width containment', () => {
+  const src = read('./LoopKanban.tsx')
+
+  it('scrolls the board inside its own pane (min-w-0 + overflow-x-auto on the row)', () => {
+    // The board row is the only horizontal-scroll container: a wide board of
+    // fixed-width columns must scroll INSIDE the pane, never widen the dashboard
+    // box or force a page-level scrollbar (the Timeline strip rule).
+    const row = /className=\{`\$\{shell\} flex[^`]*`\}/.exec(src)?.[0]
+    expect(row, 'the board row className should exist').toBeTruthy()
+    expect(row).toMatch(/overflow-x-auto/)
+    expect(src).toMatch(/const shell = 'min-w-0'/)
+  })
+
+  it('keeps columns fixed-width and shrink-0, card titles truncating', () => {
+    expect(src).toMatch(/w-\[248px\] shrink-0/) // fixed, non-shrinking column track
+    expect(src).toMatch(/min-w-0 truncate/) // card title truncates inside the column
+  })
+
+  it('clips an expanded card body via the shared collapse wrapper', () => {
+    expect(src).toMatch(/CollapsibleBody/)
+  })
+})
+
 describe('LoopChart container-driven sizing', () => {
   const src = read('./LoopChart.tsx')
 

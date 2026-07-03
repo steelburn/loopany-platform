@@ -8,6 +8,7 @@ import { getArtifacts } from '../server/loopApi'
 import { LoopChart } from './LoopChart'
 import { LoopEmbed } from './LoopEmbed'
 import { LoopCalendar } from './LoopCalendar'
+import { LoopKanban } from './LoopKanban'
 
 /**
  * Renders a loop's generative-UI template (agent-authored HTML on `Job.ui`).
@@ -21,6 +22,7 @@ import { LoopCalendar } from './LoopCalendar'
  *   <loop-chart series="mrr:MRR:$, paid:Paid"></loop-chart>   multi-series trend chart
  *   <loop-embed match="reports/digest-*.md"></loop-embed>      newest matching artifact, embedded
  *   <loop-calendar match="reports/*.md"></loop-calendar>       month calendar of produced files
+ *   <loop-kanban columns="a,b,c" match="notes/*.md">           typed products as a board, columns = type
  *
  * Registering a new primitive means moving three things together: LOOP_TAGS +
  * the sanitizer config below, the parser swap in `options`, and the skill's
@@ -28,10 +30,10 @@ import { LoopCalendar } from './LoopCalendar'
  * allowlist and the skill prose must never drift apart.
  */
 
-const LOOP_TAGS = ['loop-chart', 'loop-embed', 'loop-calendar']
+const LOOP_TAGS = ['loop-chart', 'loop-embed', 'loop-calendar', 'loop-kanban']
 
 /** Data-bearing attributes on the loop-* primitives (all parsed by us, never markup). */
-const LOOP_ATTRS = ['series', 'file', 'match', 'full']
+const LOOP_ATTRS = ['series', 'file', 'match', 'full', 'columns']
 
 const ARTIFACT_RETRY_MAX = 3
 const ARTIFACT_RETRY_MS = 4000
@@ -73,7 +75,7 @@ export function LoopView({
   html: string
   runs: RunSummary[]
   loopId: string
-  /** The loop's task-file path - lets <loop-embed>/<loop-calendar> exclude the spec from match results / the default product set. */
+  /** The loop's task-file path - lets <loop-embed>/<loop-calendar>/<loop-kanban> exclude the spec from match results / the default product set. */
   taskFile?: string
 }) {
   const clean = useMemo(() => {
@@ -94,7 +96,7 @@ export function LoopView({
   // A failed fetch keeps the current state (null ⇒ still loading) and retries
   // a bounded few times - the deps don't move between runs, so latching an
   // empty list here would show "no file matches" until the next run settles.
-  const wantsArtifacts = /<loop-(embed|calendar)\b/.test(clean)
+  const wantsArtifacts = /<loop-(embed|calendar|kanban)\b/.test(clean)
   const [artifacts, setArtifacts] = useState<ArtifactSummary[] | null>(null)
   const newestRunId = runs[0]?.id
   const newestRunLive = runs[0]?.running === true
@@ -136,6 +138,16 @@ export function LoopView({
           )
         if (node.name === 'loop-calendar')
           return <LoopCalendar loopId={loopId} artifacts={artifacts} match={a.match} taskFile={taskFile} />
+        if (node.name === 'loop-kanban')
+          return (
+            <LoopKanban
+              loopId={loopId}
+              artifacts={artifacts}
+              columns={a.columns}
+              match={a.match}
+              taskFile={taskFile}
+            />
+          )
         return undefined
       },
     }),

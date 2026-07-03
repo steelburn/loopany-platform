@@ -50,7 +50,9 @@ build**.
   label, `title:` a display title, `date:` the product's day (`YYYY-MM-DD`; omit it for
   a living doc that isn't a dated product). All three are optional. Pick the loop's
   small, fixed **`type` vocabulary** up front — e.g. `idea | draft | published`, or
-  `待调研 | 进行中 | 已完成` — and write it into the Spec so every run reuses the same words.
+  `research | in-progress | done` — and write it into the Spec so every run reuses the
+  same words. That vocabulary is also what a `<loop-kanban>` dashboard board keys its
+  columns on (see evolve.md §3), so keeping it small and stable pays off twice.
   The dashboard treats `date:` as the authoritative calendar date and shows
   `type`/`title` as quiet chips in the Files list. A compact example the run would write:
 
