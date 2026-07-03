@@ -557,7 +557,8 @@ LLM and executes no user code**.
   skill authoring docs (`skill/references/evolve.md` §3 + `skill/run/edit.md`) - a tag
   in the sanitizer but not the skill is never authored, the reverse renders nothing.
   `<loop-embed file="…"|match="…" [full]>` embeds the NEWEST matching synced artifact
-  (resolution + dating in the pure, tested `lib/productDate.ts`: filename date first -
+  (resolution + dating in the pure, tested `lib/productDate.ts`: front-matter `date:`
+  first (authoritative, batch 1 - see the front-matter bullet), else a filename date -
   `YYYY-MM-DD`/`YYYY_MM_DD`/`YYYYMMDD` in the BASENAME, consistent separator, not
   embedded in longer digit runs - else sync time, and the UI marks the fallback
   visibly); collapse is 300px via a WRAPPER (`overflow-hidden`+max-height), never
@@ -626,6 +627,43 @@ LLM and executes no user code**.
   `blobs`/`artifact_files`. The zero-exec invariant holds: the server only stores/reads
   bytes. The ignore list (`.git`/`node_modules`/`.loopany`/`.env*`/`*.pem`/`id_rsa*`/…)
   is enforced on BOTH daemon (don't send) and server (`gateway/artifacts.ts`, don't store).
+- **Artifact front-matter convention + blob-level meta indexing (batch 1; migration
+  `0018` = `ALTER TABLE blobs ADD meta text`).** Markdown products MAY open with a
+  fenced `---` block of simple top-level `key: value` scalars; the indexed subset is
+  `{type?, title?, date?}` (all optional — `type` an OPEN per-loop classification label,
+  `title` a display title, `date` presence = dated product). A **SOFT convention** —
+  prompt + UI incentive, NEVER a sync/storage gate. **Parser** (`server/frontmatter.ts`,
+  pure, ZERO deps like `parseUnifiedDiff`): only attempts when content opens with a
+  `---` fence, bounds the scanned block (`MAX_BLOCK_BYTES` 8KB), reads only flat
+  scalars (quoted values unquoted, indented/nested/list/comment lines skipped, unknown
+  keys KEPT), clips values (500), and returns null/partial on ANY malformation — NEVER
+  throws. `parseFrontMatter` → full scalar map; `artifactMeta` → the stored `{type?,
+  title?,date?}` subset (raw `date` — validity is the consumer's concern). **Indexing is
+  blob-level, write-time** (front matter is a pure function of content): parsed ONCE at
+  BOTH byte ingress points in `gateway/index.ts` — `sync()` inline (≤64KB) and
+  `putBlob()` — only for non-binary bytes, stored on `blobs.meta` (JSON). Content-
+  addressed dedup means a re-referenced hash reuses its meta (the ingress guards skip
+  re-parse when `blobExists`; `recordBlob(hash,size,binary,meta?)` onConflictDoNothing
+  keeps the first-parsed meta). Old blobs keep meta null = untyped, zero
+  migration/backfill. Zero-exec invariant holds (pure string work). **Read path:**
+  `store.listArtifactsWithMeta` joins `artifact_files ⋈ blobs.meta` (one indexed join,
+  no per-file byte fetch); `toArtifactSummary` + `ArtifactSummary.meta` (types.ts) carry
+  it out via `getArtifacts`; meta is null for untyped/binary/oversize/deleted. **UI:**
+  `LoopFilesPanel` shows a quiet `type` chip (design language of the TASK chip) and uses
+  `title` as the display name where it improves the row (path kept as a subline); the
+  task file (README/Spec) is EXEMPT — keeps its TASK treatment. `lib/productDate.ts`
+  gained front-matter `date:` as the AUTHORITATIVE source (`parseMetaDate`, tolerant of
+  `-`/`/`/`_` separators + ISO-timestamp day), demoting the filename heuristic to
+  fallback and sync-time to last (still visibly marked); `ProductDate.source` gained
+  `'frontmatter'`, and loop-calendar/loop-embed dating follow via the shared helpers.
+  **Docs:** `create.md` §0.5 (propose-then-confirm now designs the product format +
+  `type` vocabulary into the Spec, compact example), `run/exec-loop.md` (one line: write
+  products per the Spec's front-matter convention). **Follow-up task owns `<loop-kanban>`**
+  (a collection view over typed products) — NOT documented/built here. Tests:
+  `frontmatter.test.ts` (parser matrix), `gateway/sync.test.ts` (sync-inline + putBlob
+  persist meta, dedup reuses, malformed → null never fails sync, getArtifacts surfaces
+  meta), `productDate.test.ts` (date precedence), `LoopFilesPanel.test.ts` (chips),
+  `LoopCalendar.test.ts` (calendar prefers `date:`).
 - **Artifact live-sync Phase 2 (web Files view) + Phase 3 (per-run diff).** Read-only,
   built on Phase 1. **Phase 2:** lazy-by-id server fns `getArtifacts`/`getArtifact`
   (`server/loopApi.ts`) → pure helpers in `server/artifactFiles.ts` (read bytes via

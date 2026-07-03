@@ -140,7 +140,7 @@ describe('LoopView artifact primitives', () => {
     // yet" until the next run settled (the effect deps don't move in between).
     vi.useFakeTimers()
     try {
-      const file = { path: 'reports/digest-2026-07-01.md', size: 10, updatedAt: '2026-07-01T08:00:00.000Z', binary: false, oversize: false }
+      const file = { path: 'reports/digest-2026-07-01.md', size: 10, updatedAt: '2026-07-01T08:00:00.000Z', binary: false, oversize: false, meta: null }
       vi.mocked(getArtifacts).mockClear()
       vi.mocked(getArtifacts).mockRejectedValueOnce(new Error('blip')).mockResolvedValueOnce([file])
       const host = document.createElement('div')
@@ -168,7 +168,7 @@ describe('LoopView artifact primitives', () => {
     // The spec README syncs on every edit, so under a broad glob its sync-day
     // date would outrank yesterday's date-stamped digest. Same rule as the
     // calendar's default set; an exact file= path may still target it.
-    const mkFile = (path: string, updatedAt: string) => ({ path, size: 10, updatedAt, binary: false, oversize: false })
+    const mkFile = (path: string, updatedAt: string) => ({ path, size: 10, updatedAt, binary: false, oversize: false, meta: null })
     vi.mocked(getArtifacts).mockClear()
     vi.mocked(getArtifacts).mockResolvedValue([
       mkFile('README.md', '2026-07-02T09:00:00.000Z'),

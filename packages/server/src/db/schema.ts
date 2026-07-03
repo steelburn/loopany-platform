@@ -13,6 +13,10 @@
 import { sql } from "drizzle-orm";
 import { sqliteTable, text, integer, real, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+import type { ArtifactMeta } from "../server/frontmatter.js";
+
+export type { ArtifactMeta } from "../server/frontmatter.js";
+
 // ---- shared value shapes (mirror the carried-over scheduler types) ----
 
 /** Declares a loop's per-run numeric observation metrics (chart legend + validation). */
@@ -297,6 +301,12 @@ export const blobs = sqliteTable("blobs", {
   size: integer("size").notNull(),
   /** Heuristic: the bytes contain a NUL (download-only; no inline text render). */
   binary: integer("binary", { mode: "boolean" }).notNull().default(false),
+  /** Parsed front-matter subset ({type?,title?,date?}) for a non-binary markdown
+   *  product, or null (untyped / binary / no usable front matter). Front matter is
+   *  a pure function of content, so this is parsed ONCE where the bytes first
+   *  arrive (sync inline / putBlob) and reused on every content-addressed dedup
+   *  re-reference. Old blobs keep it null — zero migration/backfill. */
+  meta: text("meta", { mode: "json" }).$type<ArtifactMeta>(),
   createdAt: text("created_at").notNull(),
 });
 

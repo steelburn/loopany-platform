@@ -29,12 +29,13 @@ class RO {
 globalThis.ResizeObserver = RO as unknown as typeof ResizeObserver
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const file = (path: string): ArtifactSummary => ({
+const file = (path: string, meta: ArtifactSummary['meta'] = null): ArtifactSummary => ({
   path,
   size: 10,
   updatedAt: '2026-07-01T08:00:00.000Z',
   binary: false,
   oversize: false,
+  meta,
 })
 const ARTIFACTS = [file('reports/digest-2026-07-01.md'), file('reports/digest-2026-06-30.md')]
 
@@ -75,5 +76,27 @@ describe('LoopCalendar dot mode', () => {
     const out = await mountThroughLoading(800)
     expect(out).toContain('truncate rounded border')
     expect(out).not.toContain('size-2')
+  })
+})
+
+describe('LoopCalendar front-matter dating', () => {
+  it('dates a product by its front-matter date over the filename, and labels the source', async () => {
+    measuredWidth = 800
+    // Filename says 2026-07-01; front matter says the 15th → the 15th wins and is
+    // the newest, so it auto-selects and the viewer labels it "dated by front matter".
+    const arts = [file('reports/digest-2026-07-01.md', { date: '2026-07-15', title: 'Mid-July' })]
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(LoopCalendar, { loopId: 'loop-1', match: 'reports/*.md', artifacts: arts }))
+    })
+    const out = host.innerHTML
+    await act(async () => root.unmount())
+    host.remove()
+    // The selected product's viewer caption reflects the authoritative source…
+    expect(out).toContain('· dated by front matter ·')
+    // …and the calendar shows july 2026 (the front-matter month, not june).
+    expect(out).toContain('july 2026')
   })
 })

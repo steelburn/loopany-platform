@@ -8,6 +8,7 @@ const art = (path: string, over: Partial<ArtifactSummary> = {}): ArtifactSummary
   updatedAt: '2026-06-30T00:00:00.000Z',
   binary: false,
   oversize: false,
+  meta: null,
   ...over,
 })
 

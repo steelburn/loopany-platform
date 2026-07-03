@@ -4,19 +4,22 @@
  * `match="…"` glob against the synced artifact list. Framework-free and
  * unit-tested (productDate.test.ts), like fileEntries.ts.
  *
- * Date rule: a product's day comes from its FILENAME when parseable
- * (`YYYY-MM-DD`, `YYYY_MM_DD`, or `YYYYMMDD` - the convention loops already
- * write, e.g. `digest-2026-07-01.md`, `workflow-setup-<date>.md`); otherwise
- * it falls back to the file's sync time (`updatedAt`), which the UI marks as
+ * Date rule (in priority order): a product's day comes from its FRONT MATTER
+ * `date:` when present + parseable (the authoritative source — the loop declared
+ * it); else from its FILENAME when parseable (`YYYY-MM-DD`, `YYYY_MM_DD`, or
+ * `YYYYMMDD` - e.g. `digest-2026-07-01.md`, `workflow-setup-<date>.md`); else it
+ * falls back to the file's sync time (`updatedAt`), which the UI marks as
  * fallback-dated. Sync time ≈ run end in practice (the daemon flushes a final
  * sync before reporting), but it can misattribute a re-synced old file - hence
  * the visible distinction.
  */
 
+import type { ArtifactMeta } from '../types'
+
 export interface ProductDate {
   /** Calendar day, `YYYY-MM-DD`. */
   date: string
-  source: 'filename' | 'sync'
+  source: 'frontmatter' | 'filename' | 'sync'
 }
 
 const basename = (path: string): string => path.split('/').pop() || path
@@ -57,8 +60,28 @@ export function localDay(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
-/** Date one artifact: filename first, sync time as the marked fallback. */
-export function productDate(file: { path: string; updatedAt: string }): ProductDate {
+/**
+ * A calendar day from a front-matter `date:` value (stored RAW — validity is
+ * decided here). Forgiving about the shape: takes the leading `YYYY-MM-DD` (or
+ * `/`/`_` separators, or a full ISO timestamp's date part) and validates it's a
+ * real day. Returns null for anything unparseable/invalid (fall through to
+ * filename/sync).
+ */
+export function parseMetaDate(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null
+  const m = /^\s*(\d{4})[-/_](\d{2})[-/_](\d{2})/.exec(raw)
+  if (!m) return null
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  return validDate(y, mo, d) ? `${m[1]}-${pad(mo)}-${pad(d)}` : null
+}
+
+/** Date one artifact: front-matter `date:` first (authoritative), filename next,
+ *  sync time as the marked fallback. */
+export function productDate(file: { path: string; updatedAt: string; meta?: ArtifactMeta | null }): ProductDate {
+  const fromMeta = parseMetaDate(file.meta?.date)
+  if (fromMeta) return { date: fromMeta, source: 'frontmatter' }
   const fromName = parseFilenameDate(file.path)
   return fromName ? { date: fromName, source: 'filename' } : { date: localDay(file.updatedAt), source: 'sync' }
 }

@@ -6,7 +6,8 @@
 import { Cron } from "croner";
 
 import * as store from "../db/store.js";
-import type { ArtifactFile, Loop, Run } from "../db/schema.js";
+import type { ArtifactFileWithMeta } from "../db/store.js";
+import type { Loop, Run } from "../db/schema.js";
 import type { ArtifactSummary, JobDetail, JobFull, JobSummary, RunSummary } from "../types.js";
 
 const SUMMARY_RUNS = 18;
@@ -47,15 +48,18 @@ export function toRunSummary(r: Run): RunSummary {
   };
 }
 
-/** One live artifact_files row → the compact UI shape (metadata only; the bytes
- *  are fetched lazily by getArtifact / the download route, mirroring getTranscript). */
-export function toArtifactSummary(row: ArtifactFile): ArtifactSummary {
+/** One live artifact_files row (with its blob meta joined) → the compact UI shape
+ *  (metadata only; the bytes are fetched lazily by getArtifact / the download
+ *  route, mirroring getTranscript). The front-matter `meta` rides along so the
+ *  Files list + calendar can surface type/title/date without a byte fetch. */
+export function toArtifactSummary(row: ArtifactFileWithMeta): ArtifactSummary {
   return {
     path: row.path,
     size: row.size ?? null,
     updatedAt: row.updatedAt,
     binary: row.binary,
     oversize: row.oversize,
+    meta: row.meta ?? null,
   };
 }
 

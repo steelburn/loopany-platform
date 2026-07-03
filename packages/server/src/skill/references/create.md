@@ -43,6 +43,27 @@ build**.
 - **Per-run output.** Propose a concrete artifact or message format: "a short markdown
   summary in `report.md`", "a one-line status, alert only when something looks off",
   "an article at `articles/<date>.md`". This becomes the Spec + notify rule.
+- **Product format — when the loop writes markdown products.** Design their shape now
+  so the dashboard can index them. Each product opens with a fenced `---` front-matter
+  block of **simple top-level `key: value` scalars** (no nested YAML, no lists — the
+  parser reads only flat scalars): `type:` the loop's own one-word classification
+  label, `title:` a display title, `date:` the product's day (`YYYY-MM-DD`; omit it for
+  a living doc that isn't a dated product). All three are optional. Pick the loop's
+  small, fixed **`type` vocabulary** up front — e.g. `idea | draft | published`, or
+  `待调研 | 进行中 | 已完成` — and write it into the Spec so every run reuses the same words.
+  The dashboard treats `date:` as the authoritative calendar date and shows
+  `type`/`title` as quiet chips in the Files list. A compact example the run would write:
+
+  ```markdown
+  ---
+  type: draft
+  title: Q3 outreach plan
+  date: 2026-07-01
+  ---
+
+  # Q3 outreach plan
+  …body…
+  ```
 - **Finish line — only for goal-shaped tasks.** Some tasks have a definite done state:
   the user says "until", "reach", "iterate to", "get X to Y". Those are **closed
   loops** — they carry a one-line, checkable **goal** and finish themselves when it's
@@ -74,7 +95,9 @@ Fill it from what we ACTUALLY just did — real URLs, paths, commands, threshold
 ## Spec
 What this loop checks or does and why, plus the concrete steps / commands /
 endpoints / files involved — the real ones from this session. State when to message
-the user vs. stay silent. For a goal-driven (closed) loop, open the Spec with one or
+the user vs. stay silent. If the loop writes markdown products, state their front-matter
+convention here too: the fixed `type:` vocabulary this loop uses and whether products
+carry a `date:` (see §0.5). For a goal-driven (closed) loop, open the Spec with one or
 two sentences restating the mission and the finish line the loop works toward — so
 the run reads it as prose (the authoritative, checkable setpoint lives in the config
 `goal`, not here). There is NO `## Goal` section.
