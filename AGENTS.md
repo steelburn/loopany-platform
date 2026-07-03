@@ -122,8 +122,8 @@ computes pure functions. Run instructions: `README.md`.
   off `main` (never dirty the checkout), PR via gh, no-stacking while a prior PR is
   unmerged (still refresh status + score), one `type: open|merged` markdown card per PR
   for the kanban, daily health score, and a **day-one dashboard set up at creation**
-  (kanban + score chart, via the new create-`ui` support above). Keep it tight - no
-  react-doctor flags beyond the npx one-liner. English only.
+  (kanban + score chart, via the create-`ui` support - see "Server gotchas"). Keep it
+  tight - no react-doctor flags beyond the npx one-liner. English only.
 
 ## Workflows (deterministic pre-stage)
 
