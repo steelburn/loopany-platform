@@ -333,6 +333,9 @@ test("createLoop accepts an initial ui (day-one dashboard) — validated, persis
   const loop = store.getLoop((created.body as any).id)!;
   expect(loop.ui).toBe(ui);
   expect(loop.stateSchema).toEqual([{ key: "score", label: "Red Dot Score" }]);
+  // The real create response echoes ui presence (like dry-run), no warning when applied.
+  expect((created.body as any).ui).toBe(true);
+  expect((created.body as any).warning).toBeUndefined();
 
   // Dry-run reports ui as a presence flag (like workflow), never the markup, and persists nothing.
   const before = store.loopsForMachine(machineId).length;
@@ -342,6 +345,31 @@ test("createLoop accepts an initial ui (day-one dashboard) — validated, persis
   const withoutUi = gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", dryRun: true });
   expect((withoutUi.body as any).config.ui).toBe(false);
   expect(store.loopsForMachine(machineId).length).toBe(before);
+});
+
+test("createLoop surfaces a DROPPED ui loudly — provided but validated to nothing, never silent", () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+
+  // A whitespace-only ui coerces to null: the loop is still created, but the response
+  // echoes ui:false AND a warning so a dropped dashboard is never a silent no-op.
+  const res = gateway().createLoop(token, { name: "NoDash", cron: "0 5 * * *", taskFile: "x", ui: "   " });
+  expect(res.status).toBe(200);
+  const b = res.body as any;
+  expect(b.ui).toBe(false);
+  expect(b.warning).toMatch(/not applied|without a dashboard/i);
+  expect(store.getLoop(b.id)!.ui).toBeNull();
+
+  // Same surfacing on the dry-run path (warning at top level).
+  const dry = gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x", ui: "   ", dryRun: true });
+  expect((dry.body as any).config.ui).toBe(false);
+  expect((dry.body as any).warning).toMatch(/not applied|without a dashboard/i);
+
+  // No warning when no ui was provided at all (a blank loop is not a dropped dashboard).
+  const plain = gateway().createLoop(token, { cron: "0 5 * * *", taskFile: "x" });
+  expect((plain.body as any).warning).toBeUndefined();
+  expect((plain.body as any).ui).toBe(false);
 });
 
 test("editLoop changes a loop's envelope from its machine's device token", () => {

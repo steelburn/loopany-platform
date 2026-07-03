@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { coerceAgent, cronLooksValid, detectAgentFromEnv, resolveAgent, runCreate } from "./create.js";
 import type { InstallOpts, InstallOutcome } from "./skill-install.js";
@@ -208,21 +208,45 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(text).toContain("2026-07-03T08:00:00.000Z"); // first of the 3 fire times
   });
 
-  test("passes an initial `ui` through to the server unchanged (day-one dashboard)", async () => {
+  test("passes an initial `ui` through to the server unchanged and echoes it applied", async () => {
     const ui = '<h3>React Doctor</h3><loop-chart series="score:Red Dot Score"></loop-chart><loop-kanban columns="open,merged"></loop-kanban>';
     const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/react-doctor/README.md", ui });
     let sentBody: any = null;
+    const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
       fetchImpl: async (_url: any, init: any) => {
         sentBody = JSON.parse(init.body as string);
-        return okResponse({ ok: true, id: "loop-1", name: "React Doctor" });
+        return okResponse({ ok: true, id: "loop-1", name: "React Doctor", ui: true });
       },
       installer: async () => ({ ok: true, line: "" }),
-      stdout: () => {},
+      stdout: (s) => out.push(s),
     });
     expect(code).toBe(0);
     // The whole config (including ui) is spread into the POST body — no whitelist drops it.
     expect(sentBody.ui).toBe(ui);
+    // The real create echoes the dashboard presence (like dry-run).
+    expect(out.join("")).toContain("dashboard ui: applied");
+  });
+
+  test("a DROPPED ui is loud: echoes 'not applied' + warns on stderr, create still succeeds", async () => {
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md", ui: "   " });
+    const out: string[] = [];
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
+        fetchImpl: async () =>
+          okResponse({ ok: true, id: "loop-1", name: "NoDash", ui: false, warning: "the provided ui was empty after validation and was NOT applied — the loop was created without a dashboard" }),
+        installer: async () => ({ ok: true, line: "" }),
+        stdout: (s) => out.push(s),
+      });
+      expect(code).toBe(0); // create still succeeds
+      expect(out.join("")).toContain("dashboard ui: not applied");
+      const errText = errSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(errText).toContain("loopany: warning:");
+      expect(errText).toContain("without a dashboard");
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   test("--dry-run preview shows the ui presence line (yes when present, no when absent)", async () => {

@@ -229,6 +229,10 @@ computes pure functions. Run instructions: `README.md`.
   whitelist change; `--dry-run` reports `ui` as a presence flag (like `workflow`), not
   the markup. `create.md`'s "Dashboard at create" step tells the agent to author the
   initial `ui` when the product shape is already known (cross-refs `evolve.md` §3).
+  **A dropped dashboard is never silent**: the REAL create response echoes `ui`
+  presence (and the CLI prints `dashboard ui: applied|not applied`), and when a
+  provided `ui` validated to null the response carries a `warning` that the CLI shouts
+  to stderr — create still succeeds, just without a dashboard.
 - `describe()`/`validCadence` probe crons in the LOOP's timezone (fire times shift
   with it).
 

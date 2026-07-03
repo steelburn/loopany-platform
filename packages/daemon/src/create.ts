@@ -190,6 +190,10 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
       return 0;
     }
     write(`created loop ${data.name ?? data.id} — ${config.cron} ${timezone}\n`);
+    // Echo whether the dashboard ui landed (only when one was authored), and shout a
+    // warning if a provided dashboard was dropped — a missing dashboard is never silent.
+    if (config.ui !== undefined) write(`  dashboard ui: ${data.ui ? "applied" : "not applied"}\n`);
+    if (data.warning) process.stderr.write(`loopany: warning: ${data.warning}\n`);
     // Best-effort: now that the loop exists, install/refresh the loopany skill at
     // USER scope (`~/.claude/skills/loopany`), so the coding agent discovers the
     // references from ANY loop workdir. Announced, never blocks — any failure
@@ -216,6 +220,11 @@ interface CreateResponse {
   nextRuns?: string[];
   classification?: string;
   classificationText?: string;
+  /** Whether a dashboard ui was applied (echoed on real create, like the dry-run
+   *  preview's presence flag). */
+  ui?: boolean;
+  /** Set when a provided dashboard was dropped — surfaced loudly so it's never silent. */
+  warning?: string;
 }
 
 /** Render the `--dry-run` create preview: the normalized config, detected tz, the
@@ -236,6 +245,7 @@ function printCreateDryRun(write: (s: string) => void, data: CreateResponse, tim
     write(`  next ${runs.length} runs:\n`);
     for (const t of runs) write(`    ${t}\n`);
   }
+  if (data.warning) write(`  warning: ${data.warning}\n`);
 }
 
 /** Best-effort, announced USER-scope install (`~/.claude/skills/loopany`). Swallows
