@@ -34,6 +34,23 @@ describe('template registry', () => {
     expect([...TEMPLATE_NAMES].sort()).toEqual(TEMPLATES.map((t) => t.name).sort())
   })
 
+  test('every meta.json has a matching template.md doc (the globs cannot diverge)', () => {
+    // The registry globs meta.json (server/templates.ts) while the serving route globs
+    // template.md (api.template.$.ts) independently. A folder with one file but not the
+    // other would show a card whose /api/template/<name> fetch 404s (or a doc with no
+    // card). Re-derive the doc glob here and assert the two name-sets are identical.
+    const docs = import.meta.glob<string>('../skill/templates/*/template.md', {
+      query: '?raw',
+      eager: true,
+      import: 'default',
+    })
+    const docNames = Object.keys(docs)
+      .map((p) => p.match(/\/templates\/([^/]+)\/template\.md$/)?.[1])
+      .filter((n): n is string => Boolean(n))
+      .sort()
+    expect(docNames).toEqual([...TEMPLATE_NAMES].sort())
+  })
+
   test('ships the React Doctor template (v1) with a defaulted schedule slot', () => {
     const rd = TEMPLATES.find((t) => t.name === 'react-doctor') as TemplateInfo
     expect(rd).toBeTruthy()

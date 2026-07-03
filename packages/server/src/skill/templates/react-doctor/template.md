@@ -126,11 +126,12 @@ notify **on**, with a pre-baked dashboard (score chart + open/merged PR board):
   "notify": "auto",
   "stateSchema": [{ "key": "score", "label": "Red Dot Score", "unit": "" }],
   "ui": "<h3>React Doctor</h3><p>Daily react-doctor health score and the PR pipeline.</p><loop-chart series=\"score:Red Dot Score\"></loop-chart><loop-kanban columns=\"open,merged\"></loop-kanban>"
-}' --connect-key <connect-key> --agent claude-code
+}' --connect-key <connect-key>
 ```
 
 Notes:
 - Replace `0 5 * * *` with the cron you built from `run-at` (§0).
+- Don't pass `--agent`; the daemon auto-detects the coding agent from its environment.
 - `notify: "auto"` pushes the user only when a run has something to say — i.e. the
   PR link on PR days; silent on skip/clean days. That is the intended behavior.
 - The `ui` bakes in both dashboard primitives: `<loop-chart series="score:Red Dot

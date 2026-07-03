@@ -200,7 +200,7 @@ export function TemplateModal({
       <Modal open={open} onClose={onClose}>
         <ModalHead title={picked.label} sub="Adjust the options, or keep the defaults." />
         <div className="mt-5 grid gap-3">
-          {picked.slots.map((s: TemplateSlot) => (
+          {(picked.slots ?? []).map((s: TemplateSlot) => (
             <div key={s.name}>
               <label className={labelCls} htmlFor={`slot-${s.name}`}>
                 {s.prompt}
@@ -274,7 +274,7 @@ export function TemplateModal({
         </span>
         <button
           className={`${btn} ml-auto shrink-0`}
-          onClick={() => setStep(picked && picked.slots.length ? 'slots' : 'select')}
+          onClick={() => setStep(picked?.slots?.length ? 'slots' : 'select')}
         >
           Back
         </button>
