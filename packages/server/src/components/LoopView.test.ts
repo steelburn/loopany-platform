@@ -121,6 +121,17 @@ describe('LoopView artifact primitives', () => {
     expect(out).toContain('[ loading ]')
   })
 
+  it('keeps the comma-laden columns attr through sanitize (loop-kanban reaches its renderer)', async () => {
+    // `columns="research,in-progress,done"` carries commas DOMPurify would
+    // otherwise strip, leaving an empty <loop-kanban> that renders the "needs
+    // columns=" hint. The force-keep hook + wantsArtifacts detection must both
+    // fire, so the board reaches its renderer and (with an empty list) renders
+    // the declared column headers rather than the authoring hint.
+    const out = await mount('<loop-kanban columns="research,in-progress,done" match="notes/*.md"></loop-kanban>')
+    expect(out).not.toContain('needs columns=')
+    expect(out).toContain('in-progress') // a declared column header survived end-to-end
+  })
+
   it('shows the authoring hint when loop-embed has no target attr', () => {
     const out = render('<loop-embed></loop-embed>')
     expect(out).toContain('needs file=')

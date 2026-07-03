@@ -222,11 +222,18 @@ computes pure functions. Run instructions: `README.md`.
   wide content scrolls inside its own pane (dashboard `overflow-x-auto`, `.taskmd
   table` as a scrolling block, `Timeline` row `min-w-0 overflow-x-auto`). Guarded by
   the `*.regression.test.ts` files - keep them green.
-- Registering a `LoopView` generative-UI primitive means moving THREE things
-  together: (1) `LOOP_TAGS`/`LOOP_ATTRS` + the DOMPurify `uponSanitizeAttribute`
-  force-keep hook (data-bearing attrs are otherwise stripped, silently blanking the
-  element); (2) the html-react-parser `replace` swap; (3) the skill authoring docs
-  (`evolve.md` §3 + `skill/run/edit.md`).
+- Dashboard generative-UI primitives are `loop-embed`/`loop-calendar`/`loop-kanban`
+  (registry in `LoopView.tsx`; `loop-kanban` in `components/LoopKanban.tsx` is a
+  collection view grouping front-matter-`type`d markdown artifacts into columns -
+  `columns` REQUIRED + comma-separated, unmatched types collect in a trailing
+  "Other" column, task file always excluded). Registering one means moving THREE
+  things together: (1) `LOOP_TAGS`/`LOOP_ATTRS` + the DOMPurify `uponSanitizeAttribute`
+  force-keep hook (data-bearing attrs like `columns`/`match` are otherwise stripped,
+  silently blanking the element); (2) the html-react-parser `replace` swap; (3) the
+  skill authoring docs (`evolve.md` §3 + `skill/run/edit.md`, plus `create.md` §0.5
+  for the `type` vocabulary). Board row is the ONLY horizontal-scroll container
+  (`min-w-0 overflow-x-auto`, columns `shrink-0` fixed-width) - a wide board scrolls
+  inside its pane, never widening the page. Skill markdown + UI copy is ENGLISH ONLY.
 - Recharts stays OUT of the base client bundle (`LoopDetailView` lazy-loads the
   `LoopView` chunk). All animation is off, INCLUDING `<Tooltip
   isAnimationActive={false}>` (the position tween causes a transient page scrollbar

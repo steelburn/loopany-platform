@@ -23,9 +23,11 @@ this loop — no id needed.
     div + inline style; no `<script>`/handlers/`<svg>`). Bind live values with
     `{{latest.<key>}}`; series via `<loop-chart series="k:Label:unit">`; the loop's
     produced files via `<loop-embed match="reports/digest-*.md">` (newest matching
-    synced file, embedded) or `<loop-calendar match="reports/*.md">` (month calendar;
+    synced file, embedded), `<loop-calendar match="reports/*.md">` (month calendar;
     days come from a product's front-matter `date:`, else a `YYYY-MM-DD`-style
-    filename, else sync time).
+    filename, else sync time), or `<loop-kanban columns="research,in-progress,done"
+    match="notes/*.md">` (a board of the loop's typed products, one column per
+    front-matter `type`; unmatched types collect in a trailing "Other" column).
   - `loopany set-schema --file <path>` — JSON array of `{key, label?, unit?}`.
     Additive: pass the full intended schema; don't drop a key the UI still binds.
   - `loopany set-workflow --file <path>` — the deterministic pre-stage JS (`prev`,
