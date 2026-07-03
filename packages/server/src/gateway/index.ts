@@ -24,6 +24,7 @@ import { completionMessage, dispatchNotification, failureMessage, shouldNotify, 
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
+import { artifactMeta } from "../server/frontmatter.js";
 import { loopBytesCap, selfCronFloorMinutes, selfRescheduleFloorMinutes, snapshotRetention } from "../env.js";
 import {
   machineIdFromToken,
@@ -1238,10 +1239,15 @@ export class MachineGateway {
       keepPaths.push(rel);
     }
 
-    // Persist the inline blobs (bytes-first, then metadata row).
+    // Persist the inline blobs (bytes-first, then metadata row). Parse the product's
+    // front matter ONCE here, where the bytes first arrive — content-addressed, so a
+    // dedup re-reference (blob already recorded) reuses the stored meta rather than
+    // re-parsing (the conflict no-op keeps it), and a binary blob is never parsed.
     for (const [hash, bytes] of toStore) {
       await this.blobStore.put(hash, bytes);
-      store.recordBlob(hash, bytes.length, looksBinary(bytes));
+      if (store.blobExists(hash)) continue; // dedup: meta already computed for this hash
+      const binary = looksBinary(bytes);
+      store.recordBlob(hash, bytes.length, binary, binary ? null : artifactMeta(bytes.toString("utf8")));
     }
 
     // Deletions = absence from the full manifest → tombstone the vanished paths.
@@ -1314,7 +1320,11 @@ export class MachineGateway {
     }
 
     await this.blobStore.put(hash, bytes);
-    store.recordBlob(hash, bytes.length, looksBinary(bytes));
+    // Parse front matter once at this ingress point too (same content-addressed
+    // reuse: a re-PUT of an already-recorded hash no-ops and keeps its meta; binary
+    // bytes are never parsed).
+    const binary = looksBinary(bytes);
+    store.recordBlob(hash, bytes.length, binary, binary ? null : artifactMeta(bytes.toString("utf8")));
     return { status: 200, body: { ok: true } };
   }
 

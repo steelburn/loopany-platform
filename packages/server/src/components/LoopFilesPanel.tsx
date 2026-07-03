@@ -110,6 +110,14 @@ export function LoopFilesPanel({
               {entries.map((e) => {
                 const on = e.path === selected
                 const isTask = isTaskEntry(e)
+                // Typed artifacts (front-matter `type`/`title`) get quiet chips; the
+                // task file keeps its TASK treatment and is exempt from all of this.
+                const meta = !isTask && e.kind === 'artifact' ? e.file.meta : null
+                const title = meta?.title?.trim() || ''
+                // Prefer the authored title as the display name when it improves the
+                // row (differs from the bare filename); otherwise show the filename.
+                const display = title && title !== basename(e.path) ? title : basename(e.path)
+                const showPath = e.path.includes('/') || display !== basename(e.path)
                 return (
                   <li key={e.path}>
                     <button
@@ -126,9 +134,9 @@ export function LoopFilesPanel({
                           className={`block truncate font-mono text-[12px] ${on ? 'text-display' : 'text-primary'}`}
                           title={e.path}
                         >
-                          {basename(e.path)}
+                          {display}
                         </span>
-                        {e.path.includes('/') && (
+                        {showPath && (
                           <span className="block truncate font-mono text-[10px] text-disabled" title={e.path}>
                             {e.path}
                           </span>
@@ -137,6 +145,13 @@ export function LoopFilesPanel({
                       {isTask ? (
                         <span className="shrink-0 rounded-sm border border-wire px-1 font-mono text-[9px] tracking-[0.06em] text-secondary">
                           TASK
+                        </span>
+                      ) : meta?.type ? (
+                        <span
+                          className="shrink-0 truncate rounded-sm border border-wire px-1 font-mono text-[9px] tracking-[0.06em] text-secondary"
+                          title={`type: ${meta.type}`}
+                        >
+                          {meta.type}
                         </span>
                       ) : (
                         <span className="shrink-0 font-mono text-[9px] tracking-[0.04em] text-disabled">

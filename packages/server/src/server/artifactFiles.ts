@@ -15,9 +15,10 @@ import { getGateway } from "./boot.js";
 import { toArtifactSummary } from "./adapters.js";
 import type { ArtifactContent, ArtifactSummary } from "../types.js";
 
-/** The loop's current (non-deleted) file set as compact UI rows, path-sorted. */
+/** The loop's current (non-deleted) file set as compact UI rows, path-sorted, each
+ *  carrying its blob's front-matter meta (one indexed join, no per-file fetch). */
 export function listLoopArtifacts(loopId: string): ArtifactSummary[] {
-  return store.listArtifacts(loopId).map(toArtifactSummary);
+  return store.listArtifactsWithMeta(loopId).map(toArtifactSummary);
 }
 
 /**

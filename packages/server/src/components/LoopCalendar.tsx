@@ -32,6 +32,13 @@ interface Product {
 
 const monthOf = (day: string): string => day.slice(0, 7) // YYYY-MM
 
+/** Human label for how a product got its day (front matter is authoritative). */
+function dateSourceLabel(source: ProductDate['source']): string {
+  if (source === 'frontmatter') return 'dated by front matter'
+  if (source === 'filename') return 'dated by filename'
+  return 'dated by sync time (no date in front matter/filename)'
+}
+
 const monthIndex = (ym: string): number => {
   const [y, m] = ym.split('-').map(Number)
   return y! * 12 + m!
@@ -272,9 +279,7 @@ export function LoopCalendar({
         <div className="mt-4 min-w-0 overflow-hidden rounded-[10px] border border-hairline bg-surface">
           <ViewerHead
             path={selectedProduct.file.path}
-            meta={`${
-              selectedProduct.source === 'filename' ? 'dated by filename' : 'dated by sync time (no date in filename)'
-            } · synced ${fmt(selectedProduct.file.updatedAt)}`}
+            meta={`${dateSourceLabel(selectedProduct.source)} · synced ${fmt(selectedProduct.file.updatedAt)}`}
             action={
               <a
                 href="#files"

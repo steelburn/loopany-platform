@@ -22,6 +22,7 @@ import {
   artifactFiles,
   runSnapshots,
   type ArtifactFile,
+  type ArtifactMeta,
   type Loop,
   type Machine,
   type NewLoop,
@@ -415,9 +416,12 @@ export function blobExists(hash: string): boolean {
   return !!db.select({ hash: blobs.hash }).from(blobs).where(eq(blobs.hash, hash)).get();
 }
 
-/** Record a blob's metadata (idempotent — same hash ⇒ same bytes, so a no-op on conflict). */
-export function recordBlob(hash: string, size: number, binary: boolean): void {
-  db.insert(blobs).values({ hash, size, binary, createdAt: nowIso() }).onConflictDoNothing().run();
+/** Record a blob's metadata (idempotent — same hash ⇒ same bytes, so a no-op on
+ *  conflict). `meta` is the parsed front-matter subset for a non-binary product
+ *  (null for binary / unparsed); computed once at ingress and reused on every
+ *  content-addressed re-reference (the conflict no-op keeps the first-parsed meta). */
+export function recordBlob(hash: string, size: number, binary: boolean, meta: ArtifactMeta | null = null): void {
+  db.insert(blobs).values({ hash, size, binary, meta, createdAt: nowIso() }).onConflictDoNothing().run();
 }
 
 /** Does any LIVE artifact_files row on a loop bound to `machineId` point at `hash`?
@@ -506,6 +510,39 @@ export function listArtifacts(loopId: string): ArtifactFile[] {
     .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)))
     .orderBy(artifactFiles.path)
     .all();
+}
+
+/** One live artifact row joined with its blob's parsed front-matter meta (null for
+ *  a binary / oversize / not-yet-stored / untyped file). Read path only — the list
+ *  view surfaces the type/title/date without a per-file blob byte fetch. */
+export interface ArtifactFileWithMeta extends ArtifactFile {
+  meta: ArtifactMeta | null;
+}
+
+/** The loop's current (non-deleted) file set with each file's blob meta joined
+ *  out, path-sorted. One indexed join (artifact_files ⋈ blobs on hash), not a
+ *  point query per file. */
+export function listArtifactsWithMeta(loopId: string): ArtifactFileWithMeta[] {
+  return db
+    .select({
+      id: artifactFiles.id,
+      loopId: artifactFiles.loopId,
+      path: artifactFiles.path,
+      hash: artifactFiles.hash,
+      size: artifactFiles.size,
+      binary: artifactFiles.binary,
+      oversize: artifactFiles.oversize,
+      deleted: artifactFiles.deleted,
+      updatedAt: artifactFiles.updatedAt,
+      lastRunId: artifactFiles.lastRunId,
+      meta: blobs.meta,
+    })
+    .from(artifactFiles)
+    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
+    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)))
+    .orderBy(artifactFiles.path)
+    .all()
+    .map((r) => ({ ...r, meta: r.meta ?? null }));
 }
 
 /** Every artifact_files row for a loop, including tombstones (Phase 3 diff seam). */

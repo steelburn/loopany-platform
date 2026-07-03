@@ -39,6 +39,44 @@ describe('productDate', () => {
     expect(d.source).toBe('sync')
     expect(d.date).toMatch(/^2026-06-1[12]$/) // local day of the sync instant
   })
+
+  it('prefers the front-matter date over BOTH filename and sync time', () => {
+    // Filename says the 1st, front matter says the 5th → front matter wins.
+    expect(
+      productDate({ path: 'reports/digest-2026-07-01.md', updatedAt: '2026-07-02T09:12:00Z', meta: { date: '2026-07-05' } }),
+    ).toEqual({ date: '2026-07-05', source: 'frontmatter' })
+    // No filename date, but front matter dates it.
+    expect(productDate({ path: 'notes/methodology.md', updatedAt: '2026-06-12T09:14:00Z', meta: { date: '2026-06-20' } })).toEqual({
+      date: '2026-06-20',
+      source: 'frontmatter',
+    })
+  })
+
+  it('tolerates ISO-timestamp and /-separated front-matter dates, taking the day', () => {
+    expect(productDate({ path: 'x.md', updatedAt: '2026-06-12T09:14:00Z', meta: { date: '2026-07-05T10:00:00Z' } }).date).toBe('2026-07-05')
+    expect(productDate({ path: 'x.md', updatedAt: '2026-06-12T09:14:00Z', meta: { date: '2026/07/05' } }).date).toBe('2026-07-05')
+  })
+
+  it('falls through to filename/sync when the front-matter date is invalid or absent', () => {
+    // Unparseable raw date → filename takes over.
+    expect(productDate({ path: 'digest-2026-07-01.md', updatedAt: '2026-07-02T09:12:00Z', meta: { date: 'someday' } })).toEqual({
+      date: '2026-07-01',
+      source: 'filename',
+    })
+    // Invalid calendar day → filename/sync.
+    expect(productDate({ path: 'notes.md', updatedAt: '2026-06-12T09:14:00Z', meta: { date: '2026-13-40' } }).source).toBe('sync')
+    // Meta present but no date field → filename.
+    expect(productDate({ path: 'digest-2026-07-01.md', updatedAt: '2026-07-02T09:12:00Z', meta: { type: 'idea' } }).source).toBe('filename')
+  })
+
+  it('newestMatch prefers a front-matter-dated product over a filename-dated one', () => {
+    const files = [
+      { path: 'reports/digest-2026-07-02.md', updatedAt: '2026-07-02T09:00:00Z' },
+      // Older filename, but front matter dates it the newest.
+      { path: 'reports/digest-2026-06-01.md', updatedAt: '2026-06-01T09:00:00Z', meta: { date: '2026-07-09' } },
+    ]
+    expect(newestMatch(files, 'reports/digest-*.md')?.path).toBe('reports/digest-2026-06-01.md')
+  })
 })
 
 describe('globToRegExp / matchArtifacts', () => {

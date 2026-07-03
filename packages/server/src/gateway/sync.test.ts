@@ -299,6 +299,107 @@ test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine
   expect(await blobs.has(hash)).toBe(true);
 });
 
+// ---- front-matter meta indexing (batch 1) ----
+
+const PRODUCT = `---\ntype: idea\ntitle: My Idea\ndate: 2026-07-01\n---\n\n# Body\n`;
+
+/** The joined-out meta for a loop's live file at `path` (null when untyped). */
+function metaOf(loopId: string, path: string) {
+  return store.listArtifactsWithMeta(loopId).find((f) => f.path === path)?.meta ?? null;
+}
+
+test("sync inline path parses + persists front-matter meta on the blob", async () => {
+  const { token, loop } = seed();
+  const { gw } = gatewayWithStore();
+  const hash = sha256(PRODUCT);
+  const r = await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [{ path: "idea.md", hash, size: PRODUCT.length }],
+    blobs: [{ hash, encoding: "utf8", data: PRODUCT }],
+  });
+  expect(r.status).toBe(200);
+  expect(metaOf(loop.id, "idea.md")).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
+});
+
+test("putBlob path parses + persists front-matter meta", async () => {
+  const { token, loop } = seed();
+  const { gw } = gatewayWithStore();
+  const hash = sha256(PRODUCT);
+  // Manifest first (no inline) → the server asks for the hash…
+  const r1 = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "idea.md", hash, size: PRODUCT.length }] });
+  expect((r1.body as any).needHashes).toEqual([hash]);
+  // …then the PUT lands the bytes and parses meta at that ingress point.
+  const put = await gw.putBlob(token, hash, Buffer.from(PRODUCT));
+  expect(put.status).toBe(200);
+  expect(metaOf(loop.id, "idea.md")).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
+});
+
+test("dedup: a re-referenced hash keeps its already-parsed meta (no re-parse needed)", async () => {
+  const { token, loop } = seed();
+  const { gw } = gatewayWithStore();
+  const hash = sha256(PRODUCT);
+  await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [{ path: "idea.md", hash, size: PRODUCT.length }],
+    blobs: [{ hash, encoding: "utf8", data: PRODUCT }],
+  });
+  // Re-sync the SAME content under a NEW path (same hash → content-addressed dedup,
+  // no bytes re-uploaded) — the new file row inherits the blob's stored meta.
+  const r = await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "idea.md", hash, size: PRODUCT.length },
+      { path: "copy.md", hash, size: PRODUCT.length },
+    ],
+  });
+  expect((r.body as any).needHashes).toEqual([]); // dedup: nothing re-requested
+  expect(metaOf(loop.id, "copy.md")).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
+});
+
+test("malformed front matter stores null meta and never fails the sync", async () => {
+  const { token, loop } = seed();
+  const { gw } = gatewayWithStore();
+  const broken = "---\ntype: idea\nnever closes the fence\n"; // no closing `---`
+  const plain = "# Just a heading, no front matter\n";
+  const bh = sha256(broken);
+  const ph = sha256(plain);
+  const r = await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "broken.md", hash: bh, size: broken.length },
+      { path: "plain.md", hash: ph, size: plain.length },
+    ],
+    blobs: [
+      { hash: bh, encoding: "utf8", data: broken },
+      { hash: ph, encoding: "utf8", data: plain },
+    ],
+  });
+  expect(r.status).toBe(200);
+  expect(metaOf(loop.id, "broken.md")).toBeNull();
+  expect(metaOf(loop.id, "plain.md")).toBeNull();
+});
+
+test("getArtifacts (listLoopArtifacts) surfaces meta per file; null for untyped", async () => {
+  const { token, loop } = seed();
+  const { gw } = gatewayWithStore();
+  const plain = "# no front matter\n";
+  await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "idea.md", hash: sha256(PRODUCT), size: PRODUCT.length },
+      { path: "plain.md", hash: sha256(plain), size: plain.length },
+    ],
+    blobs: [
+      { hash: sha256(PRODUCT), encoding: "utf8", data: PRODUCT },
+      { hash: sha256(plain), encoding: "utf8", data: plain },
+    ],
+  });
+  const { listLoopArtifacts } = await import("../server/artifactFiles.js");
+  const rows = listLoopArtifacts(loop.id);
+  expect(rows.find((f) => f.path === "idea.md")!.meta).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
+  expect(rows.find((f) => f.path === "plain.md")!.meta).toBeNull();
+});
+
 test("poll response carries the watch set for every loop bound to the machine", () => {
   const { token, machineId } = seed();
   // A second loop on the same machine, one with a taskFile.

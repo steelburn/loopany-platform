@@ -7,6 +7,11 @@
 /** JSON-serializable value — server fn returns must be serializable (no `unknown`). */
 export type Json = string | number | boolean | null | { [k: string]: Json } | Json[]
 
+/** The indexed front-matter subset of a loop product (all fields optional). See
+ *  `server/frontmatter.ts` for the parsing convention. */
+export type { ArtifactMeta } from './server/frontmatter'
+import type { ArtifactMeta } from './server/frontmatter'
+
 /** The coding agent a loop is bound to / recorded as its host. Recording-only:
  *  a `codex` loop is still executed by the daemon via Claude for now. */
 export type CodingAgent = 'claude-code' | 'codex'
@@ -193,6 +198,9 @@ export interface ArtifactSummary {
   binary: boolean
   /** Over the per-file cap → metadata only (no bytes stored; not downloadable). */
   oversize: boolean
+  /** Parsed front-matter subset ({type?,title?,date?}) for a typed markdown
+   *  product; null for an untyped / binary / oversize / not-yet-stored file. */
+  meta: ArtifactMeta | null
 }
 
 /** getArtifact result: a text file's decoded content, a marker for a
