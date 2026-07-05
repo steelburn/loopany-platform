@@ -68,9 +68,15 @@ computes pure functions. Run instructions: `README.md`.
   1. `bootstrap.md` - first-contact onboarding, served at `/api/bootstrap`; never
      bundled or installed.
   2. `SKILL.md` + `references/{create,update,evolve}.md` - the PUBLIC installable
-     skill, bundled into the daemon npm package and auto-installed at USER scope
-     (`~/.claude/skills/loopany`, via `npx skills add ... -g` on `loopany up`/`new`;
-     best-effort, never blocks).
+     skill, bundled into the daemon npm package and auto-installed at USER scope for
+     EVERY coding agent loopany knows about (`SKILL_TARGET_AGENTS` in
+     `daemon/src/skill-install.ts` - Claude Code `~/.claude/skills/loopany` + Codex
+     `~/.agents/skills/loopany` today), via `npx skills add ... -a claude-code -a codex -g`
+     (repeated `-a` flags per agent; the comma form `-a a,b` is an invalid single
+     name, and `-a '*'` is deliberately avoided since it litters all ~72 supported
+     agents regardless of presence) on `loopany up`/`new`; best-effort, never blocks.
+     `installArgs` + `loopany skill status` both derive from `SKILL_TARGET_AGENTS`, so
+     adding an agent is a one-line list edit.
   3. `skill/run/{exec-loop,edit,exec-trigger}.md` - INTERNAL run prompts, imported
      `?raw` by `gateway/prompt.ts`; never served, never bundled. `run/edit.md`
      stays SEPARATE from `references/update.md` on purpose: the edit RUN uses

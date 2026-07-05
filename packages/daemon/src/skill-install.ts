@@ -1,14 +1,24 @@
 /**
  * Best-effort local install of the loopany agent skill via the `npx skills` CLI
- * (vercel-labs/skills). Installed at USER scope (`~/.claude/skills/loopany/`) to
- * match the daemon's per-machine scope: Claude Code discovers user-level skills
- * globally, so a loop agent in ANY workdir still triggers the create/update/evolve
- * references — no more per-workdir copies scattering. It's fired at `loopany up`
- * (refreshing the install to whatever daemon version just launched) and again after
- * a successful `loopany new`, and it NEVER blocks: any failure (no network, no npx,
- * no write permission, bundled skill absent) degrades silently to the always-working
+ * (vercel-labs/skills). Installed at USER scope to match the daemon's per-machine
+ * scope: coding agents discover user-level skills from ANY workdir, so a loop agent
+ * still triggers the create/update/evolve references no matter where it runs — no
+ * per-workdir copies scattering. It's fired at `loopany up` (refreshing the install
+ * to whatever daemon version just launched) and again after a successful
+ * `loopany new`, and it NEVER blocks: any failure (no network, no npx, no write
+ * permission, bundled skill absent) degrades silently to the always-working
  * /api/skill inline path. It just prints one status line. `loopany skill install`
  * is the manual escape hatch (`--project` installs into the cwd instead).
+ *
+ * MULTI-AGENT: the skill is installed for every coding agent loopany knows about
+ * (`SKILL_TARGET_AGENTS` — currently Claude Code and Codex, the two `CodingAgent`
+ * values), so a Codex user (or any of the two) gets the skill, not just Claude Code.
+ * We deliberately DON'T pass `-a '*'`: empirically the `skills` CLI treats `'*'` as
+ * "install to ALL ~72 supported agents regardless of presence", littering dozens of
+ * home dirs (`~/.aider-desk`, `~/.astrbot`, …). Targeting the known agents explicitly
+ * stays clean and is trivially extendable (add an entry to `SKILL_TARGET_AGENTS`).
+ * NOTE: the comma form `-a claude-code,codex` is INVALID (the CLI parses it as a
+ * single agent name); the list must be passed as repeated `-a <agent>` flags.
  *
  * (History: 0.4.0 deliberately kept skill logic OUT of `up` because project scope
  * would pollute an arbitrary cwd; the flip to user scope removes that hazard, so
@@ -18,17 +28,16 @@
  * packages/server/src/skill/ by scripts/sync-skill.mjs at build/prepublish) — a
  * LOCAL path source, so end users never need the private platform repo and the
  * install works offline once `skills` itself is cached. The exact invocation
- *   npx --yes skills add <dir> -a claude-code -y --copy -g
- * was verified against the current `skills` CLI (`-g` targets the user dir →
- * ~/.claude/skills/loopany/; `-y` is non-interactive + idempotent-overwrite;
- * `--copy` makes a self-contained copy, no symlink into this package's temp dir).
- * Dropping `-g` (the `--project` escape hatch) installs into the runner's cwd →
- * <cwd>/.claude/skills/loopany/.
+ *   npx --yes skills add <dir> -a claude-code -a codex -y --copy -g
+ * was verified against the current `skills` CLI (`-g` targets each agent's user dir
+ * → ~/.claude/skills/loopany/ for Claude Code, ~/.agents/skills/loopany/ for Codex;
+ * `-y` is non-interactive + idempotent-overwrite; `--copy` makes a self-contained
+ * copy, no symlink into this package's temp dir). Dropping `-g` (the `--project`
+ * escape hatch) installs into the runner's cwd instead.
  *
- * CAVEAT: a PRE-EXISTING per-workdir `<workdir>/.claude/skills/loopany` copy left
- * behind by the old project-scope installer is NOT auto-removed — it must be deleted
- * BY HAND, or it shadows the user-level skill (project scope wins in Claude Code
- * discovery).
+ * CAVEAT: a PRE-EXISTING per-workdir skill copy left behind by the old project-scope
+ * installer is NOT auto-removed — it must be deleted BY HAND, or it shadows the
+ * user-level skill (project scope wins in agent discovery).
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -120,11 +129,45 @@ export interface InstallOpts {
   runner?: Runner;
 }
 
-/** The argv (after `npx`) for the install — pure, so tests can assert it. */
+/**
+ * The coding agents the loopany skill install targets — the two `CodingAgent`
+ * values. Each carries the `skills` CLI agent id (for `-a <id>`), a human label,
+ * and the skill dir layout that agent reads (relative to the scope root: `~` for a
+ * global/user install, the cwd for a project install). Verified empirically against
+ * the current `skills` CLI: Claude Code reads `.claude/skills`, Codex reads the
+ * universal `.agents/skills`. Extend this list to cover a new agent (installArgs and
+ * `loopany skill status` both derive from it — they cannot drift).
+ */
+export const SKILL_TARGET_AGENTS: ReadonlyArray<{
+  id: string;
+  label: string;
+  /** Path segments under the scope root, before the `loopany` skill dir. */
+  skillsRoot: readonly string[];
+}> = [
+  { id: "claude-code", label: "Claude Code", skillsRoot: [".claude", "skills"] },
+  { id: "codex", label: "Codex", skillsRoot: [".agents", "skills"] },
+];
+
+/** The argv (after `npx`) for the install — pure, so tests can assert it. Targets
+ *  every agent in `SKILL_TARGET_AGENTS` via repeated `-a <id>` flags (the comma form
+ *  `-a a,b` is rejected by the CLI as one bogus agent name). */
 export function installArgs(dir: string, global = false): string[] {
-  const args = ["--yes", "skills", "add", dir, "-a", "claude-code", "-y", "--copy"];
+  const args = ["--yes", "skills", "add", dir];
+  for (const t of SKILL_TARGET_AGENTS) args.push("-a", t.id);
+  args.push("-y", "--copy");
   if (global) args.push("-g");
   return args;
+}
+
+/** The per-agent skill directories a given scope install writes to, for display.
+ *  `global` → under `~`; else under `cwd` (or `.` when unset, keeping the `./` prefix
+ *  path.join would otherwise strip). */
+export function targetSkillDirs(opts: { global?: boolean; cwd?: string } = {}): string[] {
+  return SKILL_TARGET_AGENTS.map((t) => {
+    if (opts.global) return path.join("~", ...t.skillsRoot, "loopany");
+    if (opts.cwd) return path.join(opts.cwd, ...t.skillsRoot, "loopany");
+    return `./${path.join(...t.skillsRoot, "loopany")}`;
+  });
 }
 
 /**
@@ -150,11 +193,7 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
     return { ok: false, line: `loopany skill: skipped (${err instanceof Error ? err.message : String(err)})` };
   }
   if (res.code === 0) {
-    const where = opts.global
-      ? "~/.claude/skills/loopany"
-      : opts.cwd
-        ? path.join(opts.cwd, ".claude", "skills", "loopany")
-        : "./.claude/skills/loopany";
+    const where = targetSkillDirs(opts).join(", ");
     return { ok: true, line: `loopany skill: installed → ${where}` };
   }
   const why = firstLine(res.stderr) || firstLine(res.stdout) || `exit ${res.code}`;

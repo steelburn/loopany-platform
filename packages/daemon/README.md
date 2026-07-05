@@ -73,5 +73,7 @@ credentials stay on your machine.
 
 The package also bundles the **loopany agent skill**, which teaches a coding
 agent how to author and evolve loops; `loopany up` (and `loopany new`) install
-it at user scope (`~/.claude/skills/loopany/`) automatically, so any loop on this
-machine can discover it.
+it at user scope for every coding agent loopany knows about (Claude Code
+`~/.claude/skills/loopany/` and Codex `~/.agents/skills/loopany/` today)
+automatically, so any loop on this machine can discover it. Run `loopany skill
+status` to see each agent's install location.

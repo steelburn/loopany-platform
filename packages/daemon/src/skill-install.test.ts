@@ -14,6 +14,8 @@ import {
   installArgs,
   installSkill,
   bundledSkillAvailable,
+  SKILL_TARGET_AGENTS,
+  targetSkillDirs,
   type Runner,
 } from "./skill-install.js";
 
@@ -26,13 +28,48 @@ afterAll(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
 const ok: Runner = async () => ({ code: 0, stdout: "installed", stderr: "" });
 
 describe("installArgs", () => {
-  test("project scope (default) — verified invocation", () => {
-    expect(installArgs("/b/skill")).toEqual(["--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-y", "--copy"]);
+  test("project scope (default) — verified multi-agent invocation", () => {
+    // Repeated `-a <id>` flags, one per known agent (the comma form `-a a,b` is
+    // rejected by the `skills` CLI as a single bogus agent name).
+    expect(installArgs("/b/skill")).toEqual([
+      "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-y", "--copy",
+    ]);
   });
 
   test("global appends -g", () => {
     expect(installArgs("/b/skill", true)).toEqual([
-      "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-y", "--copy", "-g",
+      "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-y", "--copy", "-g",
+    ]);
+  });
+
+  test("targets exactly the two CodingAgent values, never `-a '*'`", () => {
+    const args = installArgs("/b/skill");
+    expect(SKILL_TARGET_AGENTS.map((t) => t.id)).toEqual(["claude-code", "codex"]);
+    // one `-a` per agent, and the litter-everything wildcard never appears
+    expect(args.filter((a) => a === "-a")).toHaveLength(SKILL_TARGET_AGENTS.length);
+    expect(args).not.toContain("*");
+  });
+});
+
+describe("targetSkillDirs", () => {
+  test("global → each agent's ~ skill dir", () => {
+    expect(targetSkillDirs({ global: true })).toEqual([
+      "~/.claude/skills/loopany",
+      "~/.agents/skills/loopany",
+    ]);
+  });
+
+  test("project cwd → each agent's dir under the cwd", () => {
+    expect(targetSkillDirs({ cwd: "/loops/cookie" })).toEqual([
+      path.join("/loops/cookie", ".claude/skills/loopany"),
+      path.join("/loops/cookie", ".agents/skills/loopany"),
+    ]);
+  });
+
+  test("default (no cwd) → cwd-relative, keeps the ./ prefix", () => {
+    expect(targetSkillDirs()).toEqual([
+      "./.claude/skills/loopany",
+      "./.agents/skills/loopany",
     ]);
   });
 });
@@ -46,7 +83,8 @@ describe("installSkill", () => {
     };
     const r = await installSkill({ dir: fixtureDir, runner });
     expect(r.ok).toBe(true);
-    expect(r.line).toContain("./.claude/skills/loopany");
+    expect(r.line).toContain("./.claude/skills/loopany"); // Claude Code
+    expect(r.line).toContain("./.agents/skills/loopany"); // Codex
     expect(seen).toEqual(installArgs(fixtureDir, false));
   });
 
@@ -58,7 +96,8 @@ describe("installSkill", () => {
     };
     const r = await installSkill({ dir: fixtureDir, global: true, runner });
     expect(r.ok).toBe(true);
-    expect(r.line).toContain("~/.claude/skills/loopany");
+    expect(r.line).toContain("~/.claude/skills/loopany"); // Claude Code
+    expect(r.line).toContain("~/.agents/skills/loopany"); // Codex
     expect(seen).toContain("-g");
   });
 
@@ -72,6 +111,7 @@ describe("installSkill", () => {
     expect(r.ok).toBe(true);
     expect(seenCwd).toBe("/loops/cookie"); // the project install runs IN the loop workdir
     expect(r.line).toContain(path.join("/loops/cookie", ".claude/skills/loopany"));
+    expect(r.line).toContain(path.join("/loops/cookie", ".agents/skills/loopany"));
   });
 
   test("global ignores cwd — targets ~/.claude and runs with no cwd", async () => {

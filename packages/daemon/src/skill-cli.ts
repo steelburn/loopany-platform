@@ -3,24 +3,31 @@
  * install path `loopany up` / `loopany new` run. The manual escape hatch: lets a
  * user (re)install the loopany agent skill on demand, or check where it's installed.
  *
- * User (global) scope is THE scope now — Claude Code discovers it from any workdir,
- * matching the daemon's per-machine reach. Project scope is a rarely-needed escape.
+ * User (global) scope is THE scope now — your coding agent(s) discover it from any
+ * workdir, matching the daemon's per-machine reach. Project scope is a rarely-needed
+ * escape. The install targets EVERY agent in `SKILL_TARGET_AGENTS` (Claude Code +
+ * Codex today), and `status` reports each one's location honestly.
  *
  *   loopany skill              # same as `loopany skill install`
- *   loopany skill install      # install into ~/.claude/skills/loopany (user/global)
+ *   loopany skill install      # install for each known agent at user scope (~/…)
  *   loopany skill install -g   # same (accepted, redundant)
- *   loopany skill install --project  # escape hatch: install into ./.claude/skills/loopany (cwd)
- *   loopany skill status       # report where the skill is installed + bundle state
+ *   loopany skill install --project  # escape hatch: install under the cwd instead
+ *   loopany skill status       # report each agent's install location + bundle state
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { bundledSkillAvailable, installSkill } from "./skill-install.js";
+import { bundledSkillAvailable, installSkill, SKILL_TARGET_AGENTS } from "./skill-install.js";
 
-function isInstalledAt(root: string): boolean {
+/** The `loopany` skill dir for one agent, under a scope root. */
+function skillDirFor(root: string, skillsRoot: readonly string[]): string {
+  return path.join(root, ...skillsRoot, "loopany");
+}
+
+function isInstalledAt(dir: string): boolean {
   try {
-    return fs.statSync(path.join(root, ".claude", "skills", "loopany", "SKILL.md")).isFile();
+    return fs.statSync(path.join(dir, "SKILL.md")).isFile();
   } catch {
     return false;
   }
@@ -33,11 +40,15 @@ export async function runSkill(args: string[]): Promise<number> {
   const project = args.includes("--project") || args.includes("--local");
 
   if (sub === "status") {
-    const home = isInstalledAt(os.homedir());
-    const local = isInstalledAt(process.cwd());
     process.stdout.write(`loopany skill status:\n`);
-    process.stdout.write(`  user (${path.join(os.homedir(), ".claude/skills/loopany")}): ${home ? "installed" : "not installed"}\n`);
-    process.stdout.write(`  project (${path.join(process.cwd(), ".claude/skills/loopany")}): ${local ? "installed (would shadow user scope)" : "not installed"}\n`);
+    // One honest line per agent × scope (user + project), derived from the same
+    // target list the installer uses, so the two surfaces cannot drift.
+    for (const t of SKILL_TARGET_AGENTS) {
+      const userDir = skillDirFor(os.homedir(), t.skillsRoot);
+      const projectDir = skillDirFor(process.cwd(), t.skillsRoot);
+      process.stdout.write(`  ${t.label} user (${userDir}): ${isInstalledAt(userDir) ? "installed" : "not installed"}\n`);
+      process.stdout.write(`  ${t.label} project (${projectDir}): ${isInstalledAt(projectDir) ? "installed (would shadow user scope)" : "not installed"}\n`);
+    }
     process.stdout.write(`  bundled source: ${bundledSkillAvailable() ? "available" : "missing"}\n`);
     return 0;
   }
