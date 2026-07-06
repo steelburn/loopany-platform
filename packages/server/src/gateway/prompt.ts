@@ -21,6 +21,19 @@
  * the deep protocol); the deep protocol itself moves to the skill in a later batch.
  * The old standing system prompt (exec-loop.md) is retained as that batch's source
  * but is no longer imported or delivered.
+ *
+ * Batch 2 extends the same move to the EVOLVE and EDIT runs, and trims the inlined
+ * run history. `buildEvolvePrompt`/`buildEditPrompt` now return "" (empty system
+ * prompt, exactly like exec) — the standing prose ships in the first user turn,
+ * concatenated ahead of each role's payload by `buildEvolveTask`/`buildEditTask`.
+ * The untrusted-data guard rides along in that prose (evolve reads run messages;
+ * edit reads the loop's current config — both untrusted). `buildEvolveTask` no
+ * longer dumps up to 12 runs as pretty-printed JSON (tens of KB of full messages +
+ * full state); it emits a compact one-line-per-run SURVEY (ts / role / outcome-status
+ * / cost / state KEYS only / session id / message clipped ~100 chars), headed by the
+ * on-demand pointers (`loopany log [--transcript]`, now reachable in-run, and the
+ * local session JSONL). `buildEditTask` KEEPS its inlined current ui/workflow/schema:
+ * that is current config, not history, and is genuinely useful for a surgical edit.
  */
 import type { Loop, Run, StateField } from "../db/schema.js";
 
@@ -93,22 +106,35 @@ export function buildExecTask(loop: Loop): string {
   return fillVars(loadPrompt("exec-core"), { name, taskFile, goalLine, stateLine });
 }
 
-/** Fixed internal prompt for the data-grounded evolution pass. */
+/**
+ * The evolve system prompt is now EMPTY (like exec, Batch 1): the standing evolve
+ * prose moved into the first user turn, concatenated ahead of the payload by
+ * `buildEvolveTask`. Returning "" makes the daemon's `--append-system-prompt-file`
+ * a harmless no-op on every existing daemon (ships server-first). Kept as a function
+ * so delivery wiring stays stable; retire once the daemon drops the flag.
+ */
 export function buildEvolvePrompt(): string {
-  return loadPrompt("evolve");
+  return "";
 }
 
-/** Standing prompt for an owner-requested edit pass (apply one change, then stop). */
+/**
+ * The edit system prompt is now EMPTY (like exec/evolve, Batch 2): the short edit
+ * CORE moved into the first user turn, concatenated ahead of the payload by
+ * `buildEditTask`. Same server-first, harmless-no-op rationale as the others.
+ */
 export function buildEditPrompt(): string {
-  return loadPrompt("edit");
+  return "";
 }
 
-/** The edit payload: the loop's current envelope + the owner's instruction. The
- *  current ui/schema/workflow are inlined when present so an edit can make a
- *  surgical change to them rather than blind-rewrite (mirrors the evolve task). */
+/** The edit user turn — the short edit CORE (apply ONE owner-requested change, don't
+ *  run the task, don't finish, end with `loopany report`; carries the untrusted-data
+ *  guard + skill pointer) ahead of the payload. The current ui/schema/workflow are
+ *  inlined when present so an edit can make a surgical change to them rather than
+ *  blind-rewrite — that is current CONFIG, not history, so it stays inlined (§3.4). */
 export function buildEditTask(loop: Loop, instruction: string): string {
   const where = loop.timezone ? `${loop.cron} (${loop.timezone})` : `${loop.cron} (server-local)`;
   const parts = [
+    loadPrompt("edit"),
     `[loop edit · ${loop.name || loop.id}]`,
     `Loop id: ${loop.id}`,
     `Current schedule: ${where}`,
@@ -121,37 +147,78 @@ export function buildEditTask(loop: Loop, instruction: string): string {
   if (loop.workflow) parts.push("Current workflow:\n```js\n" + loop.workflow + "\n```");
   parts.push(
     `The owner wants this change:\n${instruction.trim()}`,
-    "Apply it now per your instructions, then report a one-line summary of what you changed.",
+    "Apply it now per the instructions above, then report a one-line summary of what you changed.",
   );
   return parts.join("\n\n");
 }
 
-/** The evolution payload: current loop shape + recent observed runs. */
+/** How many chars of a run's message survive in the compact survey (rest → ellipsis;
+ *  the full text is a `loopany log`/session away). */
+const SURVEY_MESSAGE_CAP = 100;
+
+/** A run's message collapsed to a single clipped line for the survey. */
+function surveyMessage(message: string | null): string {
+  const s = (message ?? "").replace(/\s+/g, " ").trim();
+  if (!s) return "—";
+  return s.length > SURVEY_MESSAGE_CAP ? s.slice(0, SURVEY_MESSAGE_CAP) + "…" : s;
+}
+
+/** One run as a single survey line. State appears as KEYS only — values are noise at
+ *  survey altitude, and the agent pulls them via `loopany log`/the session if a call
+ *  hinges on them. The session id is kept in FULL so the deep-dive `find … -name
+ *  '<session>.jsonl'` resolves; only the message is clipped. */
+function surveyRow(r: Run): string {
+  const outcomeStatus = `${r.outcome ?? "—"}/${r.status ?? "—"}`;
+  const cost = r.costUsd != null ? `$${r.costUsd.toFixed(2)}` : "—";
+  const keys = r.state && typeof r.state === "object" ? Object.keys(r.state) : [];
+  const metrics = keys.length ? keys.join(",") : "—";
+  return [
+    (r.ts ?? "—").padEnd(24),
+    (r.role ?? "—").padEnd(7),
+    outcomeStatus.padEnd(16),
+    cost.padEnd(7),
+    metrics.padEnd(16),
+    (r.sessionId ?? "—").padEnd(38),
+    surveyMessage(r.message),
+  ].join(" ");
+}
+
+/** The compact recent-runs survey: one line per run (oldest → newest), headed by the
+ *  on-demand pointers. Replaces the old tens-of-KB pretty-printed JSON dump — full
+ *  detail (state values, un-clipped message, transcript) is a `loopany log`/session
+ *  away, and `loopany log` now works IN-RUN too, so this is enrichment, not the only
+ *  window into history. */
+function renderRecentRuns(runs: Run[]): string {
+  const header =
+    `Recent runs (oldest → newest, N=${runs.length}) — a compact survey. Full detail on demand:\n` +
+    `  · loopany log [--transcript]  — the same survey straight from the server (works in-run); --transcript adds each run's clipped transcript\n` +
+    `  · session JSONL — take a run's session id below, then: find ~/.claude/projects -name '<session>.jsonl'  (the deep, unclipped dive)`;
+  if (!runs.length) return `${header}\n\n(no prior runs yet)`;
+  const columns = [
+    "ts".padEnd(24),
+    "role".padEnd(7),
+    "outcome/status".padEnd(16),
+    "cost".padEnd(7),
+    "metrics(keys)".padEnd(16),
+    "session".padEnd(38),
+    "message",
+  ].join(" ");
+  return [header, "", columns, ...runs.map(surveyRow)].join("\n");
+}
+
+/** The evolution user turn — the standing evolve prose (shared with the installable
+ *  skill, so run-dispatch and the skill can't drift) ahead of the payload: current
+ *  loop shape + the compact recent-runs survey. */
 export function buildEvolveTask(loop: Loop, runs: Run[]): string {
   const schema = loop.stateSchema?.length ? formatSchemaFields(loop.stateSchema) : "(none declared)";
-  // Per-run metadata: what it reported, plus the `session` id that lets the agent
-  // pull that run's FULL on-disk transcript on demand (richer than anything we
-  // could inline) — see the standing evolve instructions.
-  const recent = runs.map((r) => ({
-    ts: r.ts,
-    outcome: r.outcome,
-    status: r.status,
-    sample: r.sample,
-    state: r.state,
-    message: r.message,
-    // What the run cost (claude's own USD estimate) — evolve-relevant evidence:
-    // a consistently expensive loop is a signal to lift deterministic work into
-    // the workflow or sharpen the Spec so runs stop wandering.
-    costUsd: r.costUsd ?? null,
-    session: r.sessionId ?? null,
-  }));
   return [
+    loadPrompt("evolve"),
     `[loop evolution · ${loop.name || loop.id}]`,
     `Task file: ${loop.taskFile ?? "(none)"}`,
     `Metric schema: ${schema}`,
     "Current ui:\n" + (loop.ui ? "```html\n" + loop.ui + "\n```" : "(none yet — author one if the data warrants it)"),
     "Current workflow:\n" + (loop.workflow ? "```js\n" + loop.workflow + "\n```" : "(none)"),
-    "Recent runs (oldest first):\n```json\n" + JSON.stringify(recent, null, 2) + "\n```",
+    renderRecentRuns(runs),
     "Evolve this loop per your instructions: review the recent runs' log to sharpen the task (its brief) and distil/refine the workflow, fitting the dashboard as the lighter lever. Do not message the user.",
   ].join("\n\n");
 }
