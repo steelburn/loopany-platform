@@ -70,6 +70,11 @@ describe('LoopKanban width containment', () => {
     // (min-h-0 + overflow-y-auto) instead of stretching the dashboard box.
     expect(src).toMatch(/max-h-\[420px\]/)
     expect(src).toMatch(/min-h-0 flex-col gap-2 overflow-y-auto/)
+    // Cards must OVERFLOW the cap, never flex-compress to fit it (the squeeze
+    // bug: without shrink-0 a 12-card column squashes every card instead of
+    // scrolling), and overflow below the fold gets an explicit indicator.
+    expect(src).toMatch(/min-w-0 shrink-0 overflow-hidden rounded-control/)
+    expect(src).toMatch(/↓ scroll/)
   })
 
   it('reviews a card body in the shared Modal (its own scroll container), never inline', () => {

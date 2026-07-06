@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ArtifactSummary } from '../types'
 import { isTaskPath } from '../lib/fileEntries'
 import { fmt } from '../lib/format'
@@ -139,9 +139,9 @@ export function LoopKanban({
             </span>
             <span className="text-caption text-disabled">{col.cards.length}</span>
           </div>
-          <div className="flex min-h-0 flex-col gap-2 overflow-y-auto pb-1 pr-0.5">
+          <ColumnCards count={col.cards.length}>
             {col.cards.length === 0 ? (
-              <div className="rounded-control border border-dashed border-hairline px-2.5 py-3 text-center text-caption text-disabled">
+              <div className="shrink-0 rounded-control border border-dashed border-hairline px-2.5 py-3 text-center text-caption text-disabled">
                 Empty
               </div>
             ) : (
@@ -149,7 +149,7 @@ export function LoopKanban({
                 <KanbanCard key={card.file.path} card={card} onOpen={() => setReviewing(card)} />
               ))
             )}
-          </div>
+          </ColumnCards>
         </div>
       ))}
       {reviewing && (
@@ -173,11 +173,42 @@ export function LoopKanban({
   )
 }
 
+/**
+ * A column's scrollable card list. Cards are shrink-0 (they must overflow the
+ * height-capped board, never compress to fit it); when there IS overflow below
+ * the fold, a bottom fade + "scroll" pill signals it, disappearing at the end.
+ */
+function ColumnCards({ count, children }: { count: number; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [below, setBelow] = useState(false)
+  const update = () => {
+    const el = ref.current
+    if (el) setBelow(el.scrollTop + el.clientHeight < el.scrollHeight - 4)
+  }
+  // Re-measure when the card set changes (jsdom reports 0 heights → no pill).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: count is the measurement trigger
+  useEffect(update, [count])
+  return (
+    <div className="relative flex min-h-0 flex-col">
+      <div ref={ref} onScroll={update} className="flex min-h-0 flex-col gap-2 overflow-y-auto pb-1 pr-0.5">
+        {children}
+      </div>
+      {below && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex h-12 items-end justify-center bg-gradient-to-t from-surface to-transparent">
+          <span className="mb-1 rounded-full border border-hairline bg-surface px-2 py-0.5 text-micro text-secondary shadow-card">
+            ↓ scroll
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** One artifact as a card: title + small date, click to review it in the modal. */
 function KanbanCard({ card, onOpen }: { card: Card; onOpen: () => void }) {
   const dated = card.date.source !== 'sync'
   return (
-    <div className="min-w-0 overflow-hidden rounded-control border border-hairline bg-surface shadow-card transition-colors hover:border-wire">
+    <div className="min-w-0 shrink-0 overflow-hidden rounded-control border border-hairline bg-surface shadow-card transition-colors hover:border-wire">
       <button
         type="button"
         onClick={onOpen}
