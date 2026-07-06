@@ -2139,6 +2139,27 @@ test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op
   expect(b.rejections).toEqual([]);
 });
 
+test("show --json → edit roundtrip holds when the pinned runAt is stale (past): re-feeding it is a no-op, never a 400", () => {
+  const { deviceToken, id, gw } = seededRichLoop();
+  // A paused/completed loop keeps a stale (past) pin — the scheduler never clears
+  // nextRunAt for a disabled loop, so `show --json` echoes a past ISO.
+  const pastPin = "2020-01-01T00:00:00.000Z";
+  store.updateLoop(id, { nextRunAt: pastPin, enabled: false });
+
+  const show = gw.cli(deviceToken, ["show", id, "--json"]);
+  expect(show.status).toBe(200);
+  const env = (show.body as { loop: Record<string, unknown> }).loop;
+  expect(env.runAt).toBe(pastPin);
+
+  const { id: _drop, ...patch } = env;
+  const dry = gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify(patch), "--dry-run"]);
+  expect(dry.status).toBe(200);
+  const b = dry.body as { ok: boolean; changes: unknown[]; rejections: unknown[] };
+  expect(b.ok).toBe(true);
+  expect(b.changes).toEqual([]);
+  expect(b.rejections).toEqual([]);
+});
+
 test("show: large ui/workflow show a size hint by default and inline under --full", () => {
   const { deviceToken, id, gw } = seededRichLoop();
 

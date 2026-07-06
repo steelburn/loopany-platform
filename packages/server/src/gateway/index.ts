@@ -916,6 +916,10 @@ export class MachineGateway {
       // `null`/blank clears the pinned override (symmetric with goal:null, and what
       // `show --json` re-feeds when there is no override) — a no-op when already null.
       if (p.runAt === null || p.runAt === "") set("nextRunAt", null, loop.nextRunAt);
+      // Re-feeding the loop's CURRENT pin verbatim is a recorded no-op, bypassing the
+      // future-time guard: a paused/completed loop keeps a stale (past) `nextRunAt` that
+      // `show --json` echoes, and roundtripping it back through `edit` must not 400.
+      else if (String(p.runAt) === loop.nextRunAt) set("nextRunAt", loop.nextRunAt, loop.nextRunAt);
       else {
         const when = parseWhen(String(p.runAt));
         if (!when) rejections.push({ key: "runAt", reason: "run-at must be 30m|2h|1d or a future ISO time" });
