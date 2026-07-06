@@ -352,16 +352,19 @@ describe("idempotencyKey / canonicalJson (F8 — `new` retry-safety, design §8.
     expect(idempotencyKey("dk_a", base)).not.toBe(idempotencyKey("dk_b", base));
   });
 
-  test("the connect-key (target team) is folded in: same config + different connect-key ⇒ different keys", () => {
-    const base = { name: "Docs", cron: "0 6 * * 1", taskFile: "x" };
-    // Same config + same connect-key ⇒ same key (a genuine retry into one team still dedupes).
-    expect(idempotencyKey("dk_test", base, "dk_teamA")).toBe(idempotencyKey("dk_test", base, "dk_teamA"));
-    // Same config + DIFFERENT connect-key (different team) ⇒ different keys (no cross-team collapse).
-    expect(idempotencyKey("dk_test", base, "dk_teamA")).not.toBe(idempotencyKey("dk_test", base, "dk_teamB"));
-    // No connect-key still works and stays stable across retries.
-    expect(idempotencyKey("dk_test", base)).toBe(idempotencyKey("dk_test", base));
-    // An omitted connect-key differs from a present one (an unclaimed create isn't a team create).
-    expect(idempotencyKey("dk_test", base)).not.toBe(idempotencyKey("dk_test", base, "dk_teamA"));
+  test("hashing the FULL resolved body closes the envelope-collision class (timezone/claim/agent all count)", () => {
+    // The body is the exact outgoing request payload (config + envelope), so any field difference splits the key.
+    const body = { name: "Docs", cron: "0 6 * * 1", taskFile: "x", timezone: "Europe/Paris" };
+    // Same body ⇒ same key (a genuine retry with identical argv+env still collapses).
+    expect(idempotencyKey("dk_test", body)).toBe(idempotencyKey("dk_test", { ...body }));
+    // A different --tz (envelope) ⇒ different keys — the tz-collision the previous cherry-pick missed.
+    expect(idempotencyKey("dk_test", body)).not.toBe(idempotencyKey("dk_test", { ...body, timezone: "America/New_York" }));
+    // A different connect-key/team (rides in `claim`) ⇒ different keys (no cross-team collapse).
+    expect(idempotencyKey("dk_test", { ...body, claim: "dk_teamA" })).not.toBe(idempotencyKey("dk_test", { ...body, claim: "dk_teamB" }));
+    // A different recorded agent ⇒ different keys.
+    expect(idempotencyKey("dk_test", { ...body, agent: "claude-code" })).not.toBe(idempotencyKey("dk_test", { ...body, agent: "codex" }));
+    // The idempotencyKey nonce itself is EXCLUDED from the hash (its presence/value can't change the key).
+    expect(idempotencyKey("dk_test", body)).toBe(idempotencyKey("dk_test", { ...body, idempotencyKey: "whatever" }));
   });
 });
 
@@ -378,8 +381,8 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
   // NB: the daemon resolves its token from ~/.loopany/device-token first (env is the
   // fallback), so the integration test can't pin the exact key to a fixed token — it
   // asserts the CONTRACT (present, 64-hex, stable across retries, differs by config).
-  // The exact `sha256(machineId + canonicalJSON(config))` value is pinned by the pure
-  // idempotencyKey tests above.
+  // The exact `sha256(machineId + canonicalJSON(resolvedBody))` value is pinned by the
+  // pure idempotencyKey tests above.
   const keyOf = (sent: any[]) => JSON.parse(sent[sent.length - 1].argv[2]).idempotencyKey as string | undefined;
 
   test("a real create stamps a 64-hex `idempotencyKey`, stable across a retry of the same config", async () => {

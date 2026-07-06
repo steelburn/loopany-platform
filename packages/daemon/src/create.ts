@@ -78,21 +78,21 @@ function machineIdFromToken(token: string): string {
 }
 
 /**
- * The `new` idempotency key (F8, design §8.1): `sha256(machineId + canonicalJSON(config) + connectKey)`.
- * A timed-out retry of the SAME `loopany new` sends the SAME key, so the server
- * returns the existing loop instead of a twin; two genuinely-different configs get
- * different keys (an intentional twin survives). The config hashed is the user's
- * INTENT (the parsed `--json` object) — not the CLI envelope (timezone/agent),
- * which is derived, not intent. The connect-key IS folded in, though: it selects the
- * target TEAM, so two creates with identical config but different connect-keys are
- * genuinely different creates (different teams) and must NOT collapse — a retry reuses
- * the same nonce-free connect-key, so it still dedupes. Additive on the wire: an old
+ * The `new` idempotency key (F8, design §8.1): `sha256(machineId + canonicalJSON(body))`
+ * over the EXACT outgoing request body, minus the `idempotencyKey` nonce itself.
+ * A timed-out retry of the SAME `loopany new` resolves to an identical body (same argv +
+ * env ⇒ same config, timezone, connect-key/claim, agent), so it sends the SAME key and
+ * the server replays the existing loop instead of making a twin. ANY envelope difference —
+ * a different `--tz`, `--connect-key` (target team), `--agent`, or config field — yields a
+ * DISTINCT key, so genuinely-different creates never collapse (this closes the whole
+ * envelope-collision class, not just the connect-key case). Additive on the wire: an old
  * server ignores the key, a new server treats an absent key as no-dedupe, so both
  * directions stay compatible.
  */
-export function idempotencyKey(token: string, config: Record<string, unknown>, connectKey?: string): string {
+export function idempotencyKey(token: string, resolvedBody: Record<string, unknown>): string {
+  const { idempotencyKey: _nonce, ...rest } = resolvedBody;
   return createHash("sha256")
-    .update(`${machineIdFromToken(token)}\n${canonicalJson(config)}\n${connectKey ?? ""}`)
+    .update(`${machineIdFromToken(token)}\n${canonicalJson(rest)}`)
     .digest("hex");
 }
 
@@ -216,11 +216,11 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   if (connectKey) body.claim = connectKey;
   // Idempotency (F8): stamp a content-hash key on real creates so a timed-out retry
   // replays the existing loop instead of making a twin. A dry-run creates nothing, so
-  // it carries no key. Hashed over the user's intent (`config`) PLUS the connect-key
-  // (which selects the target team, so different-team creates don't collide), stable
-  // across retries (a retry reuses the same nonce-free connect-key).
+  // it carries no key. Hashed over the ENTIRE resolved body (config + timezone +
+  // connect-key/claim + agent) minus the nonce, so any envelope difference — including a
+  // different --tz — yields a distinct key and genuinely-different creates never collapse.
   if (dryRun) body.dryRun = true;
-  else body.idempotencyKey = idempotencyKey(token, config, connectKey);
+  else body.idempotencyKey = idempotencyKey(token, body);
 
   try {
     // The whole config travels as the unified `new --json <config>` verb; the legacy
