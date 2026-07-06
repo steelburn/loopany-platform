@@ -4,8 +4,9 @@ import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
 /**
  * POST /api/machine/cli — the ONE unified CLI dispatch (Bearer credential + `{argv}`).
  * The gateway's `cli()` branches by credential type: a `dk_`-prefixed device token
- * takes the owner verbs (new/loops/edit/log/show), a bare-UUID run token takes the
- * per-run `dispatch()` verbs plus the run-scoped `log`/`show` read branch. Same 2MB
+ * takes the owner verbs (new/loops/edit/log/show), any non-device run credential (an
+ * `rk_`-prefixed run lease, or a pre-Batch-6 bare-UUID token) takes the per-run
+ * `dispatch()` verbs plus the run-scoped `log`/`show` read branch. Same 2MB
  * `readJsonBody` cap as every other machine route. The legacy `/agent-api/loop`,
  * `/api/machine/loop`, and `/api/machine/log` endpoints stay as thin aliases onto the
  * same gateway logic (no behavior change for existing daemons).
