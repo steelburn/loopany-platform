@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ArtifactSummary } from '../types'
-import { buildFileEntries, isTaskEntry, isTaskPath } from './fileEntries'
+import { buildFileEntries, isTaskEntry, isTaskPath, pickTaskPath } from './fileEntries'
 
 const art = (path: string, over: Partial<ArtifactSummary> = {}): ArtifactSummary => ({
   path,
@@ -86,5 +86,22 @@ describe('buildFileEntries', () => {
     const entries = buildFileEntries(undefined, [art('report.md')])
     expect(entries.some((e) => isTaskEntry(e))).toBe(false)
     expect(entries).toEqual([{ kind: 'artifact', path: 'report.md', file: art('report.md') }])
+  })
+})
+
+describe('pickTaskPath', () => {
+  it('returns null when nothing matches or taskFile is absent', () => {
+    expect(pickTaskPath(undefined, ['README.md'])).toBeNull()
+    expect(pickTaskPath('/loops/l1/README.md', ['notes.md', 'reports/day-1.md'])).toBeNull()
+  })
+
+  it('suffix-matches an absolute taskFile against a relative synced path', () => {
+    expect(pickTaskPath('/home/u/loops/demo/README.md', ['notes.md', 'README.md'])).toBe('README.md')
+  })
+
+  it('prefers the exact/shallow match over a nested basename match', () => {
+    expect(pickTaskPath('/loops/l1/README.md', ['ARCHIVE/README.md', 'README.md'])).toBe('README.md')
+    // order must not matter
+    expect(pickTaskPath('/loops/l1/README.md', ['README.md', 'ARCHIVE/README.md'])).toBe('README.md')
   })
 })

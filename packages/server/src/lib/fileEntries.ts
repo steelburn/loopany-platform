@@ -49,6 +49,29 @@ export function isTaskPath(taskFile: string | undefined, artifactPath: string): 
 }
 
 /**
+ * Pick the path that best matches the loop's task file among `paths` (highest
+ * tier wins; within a tier the shallowest path wins, so a top-level README.md
+ * beats ARCHIVE/README.md regardless of order). Null when nothing matches.
+ * Shared by the Files panel row-dedup AND the server's sync-time task-file
+ * content refresh, so the two surfaces can never disagree about which synced
+ * file IS the task file.
+ */
+export function pickTaskPath(taskFile: string | undefined, paths: string[]): string | null {
+  const depth = (p: string) => norm(p).split('/').length
+  let best: string | null = null
+  let bestRank = 0
+  for (const p of paths) {
+    const rank = taskMatchRank(taskFile, p)
+    if (rank === 0) continue
+    if (rank > bestRank || (rank === bestRank && best != null && depth(p) < depth(best))) {
+      best = p
+      bestRank = rank
+    }
+  }
+  return best
+}
+
+/**
  * Build the unified entry list — the task file FIRST, then the other artifacts
  * (the server already path-sorts them). Exactly one task row in every state:
  *   - task file HAS synced → badge that artifact as the task, drop the duplicate;
@@ -56,21 +79,8 @@ export function isTaskPath(taskFile: string | undefined, artifactPath: string): 
  *     the loop record, so a brand-new loop still shows its spec.
  */
 export function buildFileEntries(taskFile: string | undefined, artifacts: ArtifactSummary[]): FileEntry[] {
-  const depth = (p: string) => norm(p).split('/').length
-  let taskArtifact: ArtifactSummary | undefined
-  let bestRank = 0
-  if (taskFile) {
-    for (const f of artifacts) {
-      const rank = taskMatchRank(taskFile, f.path)
-      if (rank === 0) continue
-      // Highest tier wins; within a tier prefer the shallowest path so a
-      // top-level README.md beats ARCHIVE/README.md regardless of sort order.
-      if (rank > bestRank || (rank === bestRank && taskArtifact && depth(f.path) < depth(taskArtifact.path))) {
-        taskArtifact = f
-        bestRank = rank
-      }
-    }
-  }
+  const bestPath = pickTaskPath(taskFile, artifacts.map((f) => f.path))
+  const taskArtifact = bestPath != null ? artifacts.find((f) => f.path === bestPath) : undefined
   const out: FileEntry[] = []
   if (taskArtifact) out.push({ kind: 'artifact', path: taskArtifact.path, file: taskArtifact, task: true })
   else if (taskFile) out.push({ kind: 'task', path: taskFile })

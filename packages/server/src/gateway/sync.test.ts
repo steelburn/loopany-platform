@@ -412,3 +412,97 @@ test("poll response carries the watch set for every loop bound to the machine", 
   expect(withTask.taskFile).toBe("/proj/loopany/l2/README.md");
   expect(withTask.workdir).toBe("/proj");
 });
+
+// ---- task-file content refresh (the create-time README gap) ----
+// The loop record's taskFileContent is what the Files panel's task pane renders.
+// It used to be written ONLY by report(), so a brand-new loop showed no README
+// until its first run finished — even though the watcher had already synced the
+// bytes. sync()/putBlob now mirror the task file's bytes onto the loop record.
+
+/** A machine + a loop whose task file lives at an ABSOLUTE machine path (the
+ *  daemon syncs paths RELATIVE to the watched folder — suffix matching applies). */
+function seedWithTaskFile(taskFile = "/home/u/loops/demo/README.md") {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile });
+  return { token, machineId, loop };
+}
+
+test("syncing the task file mirrors its content onto the loop record — no run needed", async () => {
+  const { token, loop } = seedWithTaskFile();
+  const { gw } = gatewayWithStore();
+  const content = "# Demo loop\n\n## Spec\nDo the thing daily.\n";
+  const hash = sha256(content);
+
+  expect(store.getLoop(loop.id)!.taskFileContent).toBeNull();
+  await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [{ path: "README.md", hash, size: content.length }],
+    blobs: [{ hash, encoding: "utf8", data: content }],
+  });
+  const after = store.getLoop(loop.id)!;
+  expect(after.taskFileContent).toBe(content);
+  expect(after.taskFileSyncedAt).toBeTruthy();
+});
+
+test("task-file bytes arriving via PUT (over the inline cap path) also mirror onto the loop", async () => {
+  const { token, loop } = seedWithTaskFile();
+  const { gw } = gatewayWithStore();
+  const content = "# Big spec\n" + "x".repeat(100);
+  const hash = sha256(content);
+
+  // Manifest only — bytes not in hand yet ⇒ no mirror (and no stale write).
+  const r1 = await gw.sync(token, { loopId: loop.id, manifest: [{ path: "README.md", hash, size: content.length }] });
+  expect((r1.body as any).needHashes).toEqual([hash]);
+  expect(store.getLoop(loop.id)!.taskFileContent).toBeNull();
+
+  // The PUT lands the bytes → the loop record catches up without another sync.
+  await gw.putBlob(token, hash, Buffer.from(content));
+  expect(store.getLoop(loop.id)!.taskFileContent).toBe(content);
+});
+
+test("a non-task artifact never touches taskFileContent", async () => {
+  const { token, loop } = seedWithTaskFile();
+  const { gw } = gatewayWithStore();
+  const content = "not the task file";
+  const hash = sha256(content);
+  await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [{ path: "notes.md", hash, size: content.length }],
+    blobs: [{ hash, encoding: "utf8", data: content }],
+  });
+  expect(store.getLoop(loop.id)!.taskFileContent).toBeNull();
+});
+
+test("best-match selection: root README wins over a nested one (same rule as the Files panel)", async () => {
+  const { token, loop } = seedWithTaskFile();
+  const { gw } = gatewayWithStore();
+  const root = "# the real spec\n";
+  const nested = "# archived copy\n";
+  await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [
+      { path: "ARCHIVE/README.md", hash: sha256(nested), size: nested.length },
+      { path: "README.md", hash: sha256(root), size: root.length },
+    ],
+    blobs: [
+      { hash: sha256(nested), encoding: "utf8", data: nested },
+      { hash: sha256(root), encoding: "utf8", data: root },
+    ],
+  });
+  expect(store.getLoop(loop.id)!.taskFileContent).toBe(root);
+});
+
+test("a loop without a taskFile is untouched by sync's mirror", async () => {
+  const { token, loop } = seed(); // no taskFile
+  const { gw } = gatewayWithStore();
+  const content = "README.md content on a taskFile-less loop";
+  const hash = sha256(content);
+  await gw.sync(token, {
+    loopId: loop.id,
+    manifest: [{ path: "README.md", hash, size: content.length }],
+    blobs: [{ hash, encoding: "utf8", data: content }],
+  });
+  expect(store.getLoop(loop.id)!.taskFileContent).toBeNull();
+});

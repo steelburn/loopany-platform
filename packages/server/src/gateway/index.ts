@@ -25,6 +25,7 @@ import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
 import { artifactMeta } from "../server/frontmatter.js";
+import { pickTaskPath } from "../lib/fileEntries.js";
 import { loopBytesCap, selfCronFloorMinutes, selfRescheduleFloorMinutes, snapshotRetention } from "../env.js";
 import {
   machineIdFromToken,
@@ -1158,6 +1159,8 @@ export class MachineGateway {
     const seenPaths = new Set<string>();
     const needHashes = new Set<string>();
     const toStore = new Map<string, Buffer>();
+    // Byte-backed accepted paths → hash, for the task-file content refresh below.
+    const pathHashes = new Map<string, string>();
 
     // Per-loop storage cap (runaway guard). We track a PROJECTED footprint as we
     // reconcile: the loop's already-stored bytes plus any NEW bytes this sync would
@@ -1258,6 +1261,7 @@ export class MachineGateway {
         lastRunId: runId,
       });
       keepPaths.push(rel);
+      pathHashes.set(rel, hash);
     }
 
     // Persist the inline blobs (bytes-first, then metadata row). Parse the product's
@@ -1270,6 +1274,17 @@ export class MachineGateway {
       const binary = looksBinary(bytes);
       store.recordBlob(hash, bytes.length, binary, binary ? null : artifactMeta(bytes.toString("utf8")));
     }
+
+    // Task-file live refresh: when this manifest carries the loop's task file and
+    // its bytes are in hand (inline this request, or already stored — dedup), mirror
+    // them onto loops.taskFileContent, the column the Files panel's task pane
+    // renders. report() used to be the ONLY writer, which left a brand-new loop's
+    // README invisible until its first run finished; this closes that gap and also
+    // reflects idle-time human edits within a flush. Bytes still pending a PUT are
+    // handled by putBlob's mirror below.
+    await this.refreshTaskFileContent(loop, pathHashes, async (hash) =>
+      toStore.get(hash) ?? inline.get(hash) ?? (store.blobExists(hash) ? await this.blobStore.get(hash) : null),
+    );
 
     // Deletions = absence from the full manifest → tombstone the vanished paths.
     // Cap-rejected paths are NOT tombstoned: keep their prior row (the last accepted
@@ -1296,6 +1311,26 @@ export class MachineGateway {
           : {}),
       },
     };
+  }
+
+  /** Mirror the loop's task-file bytes onto `loops.taskFileContent` (+ stamp
+   *  `taskFileSyncedAt`) when the synced manifest's best task-file match has its
+   *  bytes available. Path selection reuses `pickTaskPath` — the exact matcher the
+   *  Files panel dedups with — so server and UI can never disagree about which
+   *  synced file IS the task file. Binary bytes and unchanged content are no-ops. */
+  private async refreshTaskFileContent(
+    loop: Loop,
+    pathHashes: Map<string, string>,
+    bytesFor: (hash: string) => Promise<Buffer | null | undefined>,
+  ): Promise<void> {
+    if (!loop.taskFile) return;
+    const best = pickTaskPath(loop.taskFile, [...pathHashes.keys()]);
+    if (!best) return;
+    const bytes = await bytesFor(pathHashes.get(best)!);
+    if (!bytes || looksBinary(bytes)) return;
+    const text = bytes.toString("utf8").slice(0, WIRE_TEXT_CAP);
+    if (text === loop.taskFileContent) return; // unchanged → no row churn per flush
+    store.updateLoop(loop.id, { taskFileContent: text, taskFileSyncedAt: nowIso() });
   }
 
   // ---- PUT /api/machine/blob/:hash ----
@@ -1346,6 +1381,22 @@ export class MachineGateway {
     // bytes are never parsed).
     const binary = looksBinary(bytes);
     store.recordBlob(hash, bytes.length, binary, binary ? null : artifactMeta(bytes.toString("utf8")));
+    // Late-arriving task-file bytes: a task file over the daemon's inline cap rides
+    // this PUT (sync couldn't mirror it — no bytes in hand, and no follow-up sync is
+    // guaranteed on an idle folder). Mirror onto each referencing loop whose task
+    // file this blob backs, via the same refresh path sync uses.
+    if (!binary) {
+      for (const loopId of store.loopsReferencingHash(hash)) {
+        const loop = store.getLoop(loopId);
+        if (!loop?.taskFile) continue;
+        const rows = store.listArtifacts(loopId).filter((r) => r.hash);
+        await this.refreshTaskFileContent(
+          loop,
+          new Map(rows.map((r) => [r.path, r.hash!] as const)),
+          async (h) => (h === hash ? bytes : null), // only THIS blob's bytes are new
+        );
+      }
+    }
     return { status: 200, body: { ok: true } };
   }
 
