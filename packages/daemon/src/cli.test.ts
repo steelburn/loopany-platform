@@ -11,6 +11,7 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
+import { legacyRun, postCli, resolveCredential } from "./cli-client.js";
 import { daemonVersion } from "./version.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -95,5 +96,66 @@ describe("loopany CLI dispatch", () => {
     const r = await runCli(["update"]);
     expect(r.code).toBe(2);
     expect(r.stderr).toContain("not connected");
+  });
+});
+
+/**
+ * The shared CLI client (`postCli`) is what makes the one-grammar convergence work:
+ * it selects the credential by env (run token wins, else device), inlines the file
+ * flags, POSTs `{argv}` to /api/machine/cli, and falls back on a 404. These unit the
+ * credential selection + endpoint choice directly (the subprocess dispatch above proves
+ * the local fast-paths still exit without the daemon).
+ */
+describe("postCli credential selection", () => {
+  test("resolveCredential: the run token (env) wins over the device token", () => {
+    const cred = resolveCredential({ env: { LOOPANY_RUN_TOKEN: "run-1" }, deviceToken: "dk_dev" });
+    expect(cred).toEqual({ token: "run-1", isRun: true });
+  });
+
+  test("resolveCredential: no run token in env → the persisted device token, isRun=false", () => {
+    const cred = resolveCredential({ env: {}, deviceToken: "dk_dev" });
+    expect(cred).toEqual({ token: "dk_dev", isRun: false });
+  });
+
+  test("resolveCredential: neither present → undefined (not connected)", () => {
+    expect(resolveCredential({ env: {}, deviceToken: undefined })).toBeUndefined();
+  });
+
+  test("attaches the RUN token from env and posts {argv} to /api/machine/cli", async () => {
+    const calls: any[] = [];
+    const fetchImpl = (async (url: string, init: any) => {
+      calls.push({ url: String(url), init });
+      return { status: 200, ok: true, json: async () => ({ text: "ok", exitCode: 0 }) };
+    }) as unknown as typeof fetch;
+    const r = await postCli(["report", "--status", "new"], legacyRun, {
+      env: { LOOPANY_RUN_TOKEN: "run-xyz" },
+      server: "https://srv.test",
+      fetchImpl,
+    });
+    expect(r).toMatchObject({ kind: "ok", status: 200 });
+    expect(calls[0].url).toBe("https://srv.test/api/machine/cli");
+    expect(calls[0].init.headers.Authorization).toBe("Bearer run-xyz");
+    expect(JSON.parse(calls[0].init.body).argv).toEqual(["report", "--status", "new"]);
+  });
+
+  test("no run token → posts with the persisted DEVICE token", async () => {
+    const calls: any[] = [];
+    const fetchImpl = (async (url: string, init: any) => {
+      calls.push({ url: String(url), init });
+      return { status: 200, ok: true, json: async () => ({ ok: true, loops: [] }) };
+    }) as unknown as typeof fetch;
+    await postCli(["loops"], legacyRun, { env: {}, deviceToken: "dk_dev", server: "https://srv.test", fetchImpl });
+    expect(calls[0].init.headers.Authorization).toBe("Bearer dk_dev");
+  });
+
+  test("no credential/server → not-configured, never fetches", async () => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      return { status: 200, ok: true, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+    const r = await postCli(["loops"], legacyRun, { env: {}, deviceToken: undefined, server: "", fetchImpl });
+    expect(r).toEqual({ kind: "not-configured" });
+    expect(called).toBe(false);
   });
 });

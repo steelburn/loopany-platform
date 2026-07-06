@@ -22,11 +22,18 @@
  *                                (NEVER start the daemon).
  *   loopany --version | -v     → print just the daemon version and exit.
  *   loopany loops|edit […]     → interactive mode: the owner edits a loop from
- *                                their own Claude Code, reusing the persisted
- *                                device token (→ /api/machine/loop).
+ *                                their own coding agent, reusing the persisted
+ *                                device token.
  *   loopany <verb> [...flags]  → callback mode (when LOOPANY_RUN_TOKEN is set;
- *                                claude calls this via the PATH wrapper) →
- *                                forward argv to the server's /agent-api/loop.
+ *                                claude calls this via the PATH wrapper).
+ *
+ * The loop verbs (report, finish, show, log, set-cron, reschedule, loops, edit,
+ * new, …) no longer split into two worlds: they all funnel through the shared CLI client
+ * (`cli-client.ts` `postCli`), which attaches whatever credential the env carries —
+ * the run token if `LOOPANY_RUN_TOKEN` is set, else the persisted device token — and
+ * POSTs `{argv}` to the ONE unified dispatch `/api/machine/cli`, falling back to the
+ * legacy per-credential endpoints on a 404 (old server). Only the LOCAL verbs below
+ * (up/down/update/skill/status/help/version/bare-daemon) keep their own fast-paths.
  */
 const argv = process.argv.slice(2);
 const INTERACTIVE_VERBS = new Set(["loops", "edit"]);

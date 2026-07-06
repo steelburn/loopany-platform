@@ -203,12 +203,19 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   let finalText: string | undefined;
   let cost: RunCost | undefined;
   // System prompt goes in ~/.loopany/runs (passed to claude by absolute path), not
-  // the workdir — keeps the run's cwd clean. Removed in `finally`.
+  // the workdir — keeps the run's cwd clean. Removed in `finally`. Batches 1-2 move
+  // the full run instructions into the first user turn, so `systemPrompt` is now empty
+  // on a current server: skip the sys file + the claude-only `--append-system-prompt-file`
+  // flag entirely (an OLD server still populates it and keeps working — the flag path
+  // is preserved when the string is non-empty).
   const runsDir = path.join(LOOPANY_DIR, "runs");
-  const sysFile = path.join(runsDir, `sys-${d.runId}.md`);
+  const hasSystemPrompt = d.systemPrompt.trim().length > 0;
+  const sysFile = hasSystemPrompt ? path.join(runsDir, `sys-${d.runId}.md`) : "";
   try {
-    fs.mkdirSync(runsDir, { recursive: true });
-    fs.writeFileSync(sysFile, d.systemPrompt, "utf8");
+    if (hasSystemPrompt) {
+      fs.mkdirSync(runsDir, { recursive: true });
+      fs.writeFileSync(sysFile, d.systemPrompt, "utf8");
+    }
 
     const env: NodeJS.ProcessEnv = {
       ...execEnv(),
@@ -229,7 +236,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       "--output-format", "stream-json",
       "--verbose",
       "--permission-mode", "bypassPermissions",
-      "--append-system-prompt-file", sysFile,
+      ...(hasSystemPrompt ? ["--append-system-prompt-file", sysFile] : []),
       "--disallowed-tools", SELF_SCHEDULING_TOOLS,
     ];
     if (d.loop.model) args.push("--model", d.loop.model);
@@ -260,7 +267,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   } catch (err) {
     error = `failed to run claude: ${msg(err)}`;
   } finally {
-    fs.rmSync(sysFile, { force: true }); // don't let prompt files accumulate
+    if (sysFile) fs.rmSync(sysFile, { force: true }); // don't let prompt files accumulate
   }
 
   // Recover this session's artifacts + slimmed trace from ONE transcript read (best-effort).

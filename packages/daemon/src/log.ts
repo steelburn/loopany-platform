@@ -9,19 +9,22 @@
  * the full session JSONL for a deep dive. Pass `--transcript` (alias `--full`) to
  * inline the clipped transcript; `--json` always returns the full structured runs.
  *
- * Like `loopany loops`/`edit`, this is an owner-OUTSIDE-a-run command: it reuses
- * the device token + server URL the daemon persisted under ~/.loopany and hits the
- * device-token-scoped read endpoint (`GET /api/machine/log`). No run token, no
- * re-auth — the machine is already connected.
+ * Like `loopany loops`/`edit`, this is an owner-OUTSIDE-a-run command: it goes
+ * through the shared CLI client (`postCli`), which reuses the device token + server
+ * URL the daemon persisted under ~/.loopany and POSTs `{argv}` to the unified
+ * `/api/machine/cli`, falling back to the legacy `/api/machine/log` on a 404 (old
+ * server). No run token, no re-auth — the machine is already connected.
  *
  * The loop is resolved like the watcher resolves what to watch: an explicit
  * `<loop>` id wins; otherwise the current working directory is matched against
  * each loop's folder (`resolveLoopDir`), so running it inside a loop's workdir
- * finds that loop. Every external touch is an injectable seam for tests.
+ * finds that loop — a CLIENT-side resolution, since the server's `log` dispatch
+ * needs an explicit loop id. Every external touch is an injectable seam for tests.
  */
 import path from "node:path";
 
-import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
+import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
+import { postCli } from "./cli-client.js";
 import { resolveLoopDir } from "./loopdir.js";
 
 interface LoopRow {
@@ -160,66 +163,75 @@ function formatRun(r: RunRow, showTranscript: boolean): string {
 
 export async function runLog(argv: string[], injected: LogDeps = {}): Promise<number> {
   const d = seams(injected);
-  const token = "token" in injected ? injected.token : readStored(DEVICE_FILE);
   const flagServer = (() => {
     const i = argv.indexOf("--server-url");
     return i >= 0 ? argv[i + 1] : undefined;
   })();
-  const server = "server" in injected ? (injected.server ?? "") : resolveServerUrl(flagServer);
-  if (!token || !server) {
-    d.err(
-      "loopany: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set LOOPANY_SERVER_URL / LOOPANY_TOKEN)\n",
-    );
-    return 2;
-  }
+  // Shared postCli deps: injected server/token override the persisted ones so tests
+  // never touch ~/.loopany; production leaves them undefined and postCli resolves.
+  const cliDeps: PostCliDeps = {
+    fetchImpl: injected.fetchFn,
+    serverFlag: flagServer,
+    ...("server" in injected ? { server: injected.server } : {}),
+    ...("token" in injected ? { deviceToken: injected.token } : {}),
+  };
 
   const { positional, flags } = parseArgs(argv);
   const json = flags["json"] === true || flags["json"] === "true";
   const showTranscript = flags["transcript"] === true || flags["full"] === true;
   const limit = typeof flags["limit"] === "string" ? flags["limit"] : undefined;
-  const headers = { Authorization: `Bearer ${token}` };
 
-  try {
-    // List the machine's loops to resolve which one this directory belongs to.
-    const listRes = await d.fetchFn(`${server}/api/machine/loop`, { method: "GET", headers });
-    const listData = (await listRes.json().catch(() => ({}))) as { loops?: LoopRow[]; error?: string };
-    if (!listRes.ok || !listData.loops) {
-      d.err(`loopany: ${listData.error || `could not list loops (${listRes.status})`}\n`);
-      return 1;
-    }
-    const resolved = resolveLoopId(listData.loops, positional[0], d.cwd());
-    if ("error" in resolved) {
-      d.err(`loopany: ${resolved.error}\n`);
-      return 2;
-    }
+  const notConnected = () =>
+    d.err("loopany: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set LOOPANY_SERVER_URL / LOOPANY_TOKEN)\n");
 
-    const qs = new URLSearchParams({ loopId: resolved.id });
-    if (limit) qs.set("limit", limit);
-    const res = await d.fetchFn(`${server}/api/machine/log?${qs.toString()}`, { method: "GET", headers });
-    const data = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      name?: string;
-      runs?: RunRow[];
-      error?: string;
-    };
-    if (!res.ok || !data.ok || !data.runs) {
-      d.err(`loopany: ${data.error || `log failed (${res.status})`}\n`);
-      return 1;
-    }
-
-    if (json) {
-      d.out(`${JSON.stringify(data.runs, null, 2)}\n`);
-      return 0;
-    }
-    d.out(`${data.name ?? resolved.id} — ${data.runs.length} recent run${data.runs.length === 1 ? "" : "s"}\n`);
-    if (data.runs.length === 0) {
-      d.out("no runs yet\n");
-      return 0;
-    }
-    d.out(`\n${data.runs.map((r) => formatRun(r, showTranscript)).join("\n\n")}\n`);
-    return 0;
-  } catch (err) {
-    d.err(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);
+  // 1. List the machine's loops so we can resolve which one this directory belongs
+  //    to (client-side — the server's unified `log` needs an explicit loop id).
+  const legacyLoops: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
+    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+    return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  const listed = await postCli(["loops"], legacyLoops, cliDeps);
+  if (listed.kind === "not-configured") return notConnected(), 2;
+  if (listed.kind === "read-error") return d.err(`loopany: cannot read ${listed.path}\n`), 1;
+  if (listed.kind === "network-error") return d.err(`loopany: ${listed.message}\n`), 1;
+  const listData = listed.body as { loops?: LoopRow[]; error?: string };
+  if (listed.status >= 400 || !listData.loops) {
+    d.err(`loopany: ${listData.error || `could not list loops (${listed.status})`}\n`);
     return 1;
   }
+  const resolved = resolveLoopId(listData.loops, positional[0], d.cwd());
+  if ("error" in resolved) {
+    d.err(`loopany: ${resolved.error}\n`);
+    return 2;
+  }
+
+  // 2. Fetch the resolved loop's recent runs.
+  const logArgv = ["log", resolved.id, ...(limit ? ["--limit", limit] : [])];
+  const legacyLog: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
+    const qs = new URLSearchParams({ loopId: resolved.id });
+    if (limit) qs.set("limit", limit);
+    const res = await fetchImpl(`${server}/api/machine/log?${qs.toString()}`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+    return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  const got = await postCli(logArgv, legacyLog, cliDeps);
+  if (got.kind === "not-configured") return notConnected(), 2;
+  if (got.kind === "read-error") return d.err(`loopany: cannot read ${got.path}\n`), 1;
+  if (got.kind === "network-error") return d.err(`loopany: ${got.message}\n`), 1;
+  const data = got.body as { ok?: boolean; name?: string; runs?: RunRow[]; error?: string };
+  if (got.status >= 400 || !data.ok || !data.runs) {
+    d.err(`loopany: ${data.error || `log failed (${got.status})`}\n`);
+    return 1;
+  }
+
+  if (json) {
+    d.out(`${JSON.stringify(data.runs, null, 2)}\n`);
+    return 0;
+  }
+  d.out(`${data.name ?? resolved.id} — ${data.runs.length} recent run${data.runs.length === 1 ? "" : "s"}\n`);
+  if (data.runs.length === 0) {
+    d.out("no runs yet\n");
+    return 0;
+  }
+  d.out(`\n${data.runs.map((r) => formatRun(r, showTranscript)).join("\n\n")}\n`);
+  return 0;
 }

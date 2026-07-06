@@ -7,6 +7,11 @@
  * degrades to the plain header instead of throwing. Grouped setup-vs-management;
  * the in-run callbacks (`loopany report …`, which the agent invokes via the PATH
  * wrapper) are NOT user commands and are deliberately omitted.
+ *
+ * The owner loop verbs (loops/edit/log/new) and the in-run callbacks are no longer
+ * two separate mechanisms: both funnel through the one shared CLI client that POSTs to
+ * the unified `/api/machine/cli` dispatch (see `cli-client.ts`) — only the LOCAL verbs
+ * grouped below (up/down/update/skill/status) run without touching the server.
  */
 import { daemonVersion } from "./version.js";
 
