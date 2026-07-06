@@ -1,14 +1,27 @@
 /**
  * Interactive mode — `loopany loops` / `loopany edit <id> [...flags]`, run by the
- * owner (or their Claude Code) OUTSIDE a run. Reuses the device token + server URL
- * the daemon persisted under ~/.loopany and talks to the machine's authenticated
- * loop channel (/api/machine/loop). No run token, no re-auth, no claim — the
- * machine is already connected, so editing an existing loop needs none of that.
+ * owner (or their Claude Code) OUTSIDE a run. Goes through the shared CLI client
+ * (`postCli`), which reuses the device token + server URL the daemon persisted under
+ * ~/.loopany and POSTs `{argv}` to the unified `/api/machine/cli`, falling back to the
+ * legacy `/api/machine/loop` channel on a 404 (old server). No run token, no re-auth,
+ * no claim — the machine is already connected, so editing an existing loop needs none.
  */
 import { readFileSync } from "node:fs";
-import { DEVICE_FILE, SERVER_FILE, readStored } from "./config.js";
+
+import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
+import { postCli } from "./cli-client.js";
 
 type Flags = Record<string, string | boolean>;
+
+/** Injectable seams so tests exercise the fetch path without a real ~/.loopany or
+ *  network (mirrors LogDeps). Absent ⇒ postCli resolves the real token/server. */
+export interface InteractiveDeps {
+  fetchImpl?: typeof fetch;
+  server?: string;
+  token?: string;
+  out?: (s: string) => void;
+  err?: (s: string) => void;
+}
 
 type LoopRow = {
   id: string;
@@ -113,8 +126,7 @@ function fmtPreview(v: unknown): string {
 
 /** Print the `--dry-run` edit preview (per-key before→after + rejections). Exit 0
  *  when valid, 1 when the server flagged rejections (a removed field / bad value). */
-function printEditDryRun(data: EditResponse): number {
-  const out = (s: string) => void process.stdout.write(s);
+function printEditDryRun(data: EditResponse, out: (s: string) => void = (s) => void process.stdout.write(s)): number {
   out(`dry-run · ${data.name ?? "loop"} — nothing changed\n`);
   const changes = data.changes ?? [];
   if (changes.length) {
@@ -131,15 +143,15 @@ function printEditDryRun(data: EditResponse): number {
   return data.ok === false || rejections.length > 0 ? 1 : 0;
 }
 
-function printLoops(loops: LoopRow[]): void {
+function printLoops(loops: LoopRow[], out: (s: string) => void = (s) => void process.stdout.write(s)): void {
   if (loops.length === 0) {
-    process.stdout.write("no loops on this machine yet\n");
+    out("no loops on this machine yet\n");
     return;
   }
   for (const l of loops) {
     const state = l.enabled ? "on" : "paused";
     const tz = l.timezone ? ` ${l.timezone}` : "";
-    process.stdout.write(`${l.id}  ${state.padEnd(6)}  ${l.cron}${tz}  ${l.name}\n`);
+    out(`${l.id}  ${state.padEnd(6)}  ${l.cron}${tz}  ${l.name}\n`);
   }
 }
 
@@ -155,71 +167,86 @@ const USAGE =
   "  --dry-run                   validate + preview before/after, change nothing\n" +
   "  the server validates every field; unknown keys are rejected.\n";
 
-export async function runInteractive(argv: string[]): Promise<number> {
-  const token = readStored(DEVICE_FILE);
+export async function runInteractive(argv: string[], injected: InteractiveDeps = {}): Promise<number> {
+  const out = injected.out ?? ((s: string) => void process.stdout.write(s));
+  const err = injected.err ?? ((s: string) => void process.stderr.write(s));
   const flagServer = (() => {
     const i = process.argv.indexOf("--server-url");
     return i >= 0 ? process.argv[i + 1] : undefined;
   })();
-  const server = (flagServer || process.env.LOOPANY_SERVER_URL || readStored(SERVER_FILE) || "").replace(/\/$/, "");
-  if (!token || !server) {
-    process.stderr.write(
-      "loopany: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set LOOPANY_SERVER_URL / LOOPANY_TOKEN)\n",
-    );
-    return 2;
-  }
+  // Shared postCli deps: the injected server/token override the persisted ones so
+  // tests need no real ~/.loopany; production leaves them undefined and postCli
+  // resolves the device token + server url itself (same values as before).
+  const cliDeps: PostCliDeps = {
+    fetchImpl: injected.fetchImpl,
+    serverFlag: flagServer,
+    ...("server" in injected ? { server: injected.server } : {}),
+    ...("token" in injected ? { deviceToken: injected.token } : {}),
+  };
 
   const verb = argv[0];
   const { positional, flags } = parseFlags(argv.slice(1));
-  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  const base = `${server}/api/machine/loop`;
 
-  try {
-    if (verb === "loops") {
-      const res = await fetch(base, { method: "GET", headers });
-      const data = (await res.json().catch(() => ({}))) as { loops?: LoopRow[]; error?: string };
-      if (!res.ok || !data.loops) {
-        process.stderr.write(`loopany: ${data.error || `list failed (${res.status})`}\n`);
-        return 1;
-      }
-      printLoops(data.loops);
-      return 0;
+  const notConnected = () =>
+    err("loopany: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set LOOPANY_SERVER_URL / LOOPANY_TOKEN)\n");
+
+  if (verb === "loops") {
+    // Legacy fallback (old server, no /api/machine/cli): GET /api/machine/loop.
+    const legacy: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
+      const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+      return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+    };
+    const r = await postCli(["loops"], legacy, cliDeps);
+    if (r.kind === "not-configured") return notConnected(), 2;
+    if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
+    if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
+    const data = r.body as { loops?: LoopRow[]; error?: string };
+    if (r.status >= 400 || !data.loops) {
+      err(`loopany: ${data.error || `list failed (${r.status})`}\n`);
+      return 1;
     }
-
-    if (verb === "edit") {
-      const id = positional[0];
-      if (!id) {
-        process.stderr.write(USAGE);
-        return 2;
-      }
-      const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true";
-      let patch: Record<string, unknown>;
-      try {
-        patch = buildPatch(flags);
-      } catch (err) {
-        // A removed/unknown flag or an unreadable file/JSON — fail loudly with guidance.
-        process.stderr.write(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);
-        return 2;
-      }
-      if (Object.keys(patch).length === 0) {
-        process.stderr.write(USAGE);
-        return 2;
-      }
-      const res = await fetch(base, { method: "PATCH", headers, body: JSON.stringify({ id, patch, dryRun }) });
-      const data = (await res.json().catch(() => ({}))) as EditResponse;
-      if (dryRun && data.dryRun) return printEditDryRun(data);
-      if (!res.ok || !data.ok) {
-        process.stderr.write(`loopany: ${data.error || `edit failed (${res.status})`}\n`);
-        return 1;
-      }
-      process.stdout.write(`updated ${data.name ?? id} — ${(data.applied ?? []).join(", ")}\n`);
-      return 0;
-    }
-
-    process.stderr.write(`loopany: unknown command "${verb ?? ""}" (try: loops, edit)\n`);
-    return 2;
-  } catch (err) {
-    process.stderr.write(`loopany: ${err instanceof Error ? err.message : String(err)}\n`);
-    return 1;
+    printLoops(data.loops, out);
+    return 0;
   }
+
+  if (verb === "edit") {
+    const id = positional[0];
+    if (!id) return err(USAGE), 2;
+    const dryRun = flags["dry-run"] === true || flags["dry-run"] === "true";
+    let patch: Record<string, unknown>;
+    try {
+      patch = buildPatch(flags);
+    } catch (e) {
+      // A removed/unknown flag or an unreadable file/JSON — fail loudly with guidance.
+      return err(`loopany: ${e instanceof Error ? e.message : String(e)}\n`), 2;
+    }
+    if (Object.keys(patch).length === 0) return err(USAGE), 2;
+    // The whole edit travels as one unified verb: `edit <id> --json <patch> [--dry-run]`.
+    const cliArgv = ["edit", id, "--json", JSON.stringify(patch), ...(dryRun ? ["--dry-run"] : [])];
+    // Legacy fallback: PATCH /api/machine/loop with the {id, patch, dryRun} body the
+    // old server expects (the unified deviceCli parses the same patch out of --json).
+    const legacy: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
+      const res = await fetchImpl(`${server}/api/machine/loop`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ id, patch, dryRun }),
+      });
+      return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+    };
+    const r = await postCli(cliArgv, legacy, cliDeps);
+    if (r.kind === "not-configured") return notConnected(), 2;
+    if (r.kind === "read-error") return err(`loopany: cannot read ${r.path}\n`), 1;
+    if (r.kind === "network-error") return err(`loopany: ${r.message}\n`), 1;
+    const data = r.body as EditResponse;
+    if (dryRun && data.dryRun) return printEditDryRun(data, out);
+    if (r.status >= 400 || !data.ok) {
+      err(`loopany: ${data.error || `edit failed (${r.status})`}\n`);
+      return 1;
+    }
+    out(`updated ${data.name ?? id} — ${(data.applied ?? []).join(", ")}\n`);
+    return 0;
+  }
+
+  err(`loopany: unknown command "${verb ?? ""}" (try: loops, edit)\n`);
+  return 2;
 }

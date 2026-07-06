@@ -208,13 +208,15 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(text).toContain("2026-07-03T08:00:00.000Z"); // first of the 3 fire times
   });
 
-  test("passes an initial `ui` through to the server unchanged and echoes it applied", async () => {
+  test("posts the whole config (including `ui`) to the unified /api/machine/cli as `new --json`", async () => {
     const ui = '<h3>React Doctor</h3><loop-chart series="score:Red Dot Score"></loop-chart><loop-kanban columns="open,merged"></loop-kanban>';
     const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/react-doctor/README.md", ui });
+    let sentUrl = "";
     let sentBody: any = null;
     const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
-      fetchImpl: async (_url: any, init: any) => {
+      fetchImpl: async (url: any, init: any) => {
+        sentUrl = String(url);
         sentBody = JSON.parse(init.body as string);
         return okResponse({ ok: true, id: "loop-1", name: "React Doctor", ui: true });
       },
@@ -222,9 +224,38 @@ describe("runCreate — skill install fires only after a confirmed create, never
       stdout: (s) => out.push(s),
     });
     expect(code).toBe(0);
-    // The whole config (including ui) is spread into the POST body — no whitelist drops it.
-    expect(sentBody.ui).toBe(ui);
+    // The unified dispatch (batch 4/5) is hit, carrying `new --json <config>`.
+    expect(sentUrl).toContain("/api/machine/cli");
+    expect(sentBody.argv[0]).toBe("new");
+    expect(sentBody.argv[1]).toBe("--json");
+    // The whole config — including ui — rides inside the --json payload (no whitelist drops it).
+    expect(JSON.parse(sentBody.argv[2]).ui).toBe(ui);
     // The real create echoes the dashboard presence (like dry-run).
+    expect(out.join("")).toContain("dashboard ui: applied");
+  });
+
+  test("falls back to legacy POST /api/machine/loop with the raw config when the server 404s the unified dispatch", async () => {
+    const ui = "<h3>React Doctor</h3>";
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/react-doctor/README.md", ui });
+    const urls: string[] = [];
+    let legacyBody: any = null;
+    const out: string[] = [];
+    const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
+      fetchImpl: async (url: any, init: any) => {
+        urls.push(String(url));
+        if (String(url).includes("/api/machine/cli")) return errResponse(404, { error: "not found" });
+        // Legacy path: the body is the raw config object (ui present at top level).
+        legacyBody = JSON.parse(init.body as string);
+        return okResponse({ ok: true, id: "loop-1", name: "React Doctor", ui: true });
+      },
+      installer: async () => ({ ok: true, line: "" }),
+      stdout: (s) => out.push(s),
+    });
+    expect(code).toBe(0);
+    // Tried the unified dispatch first, then fell back to the legacy loop endpoint.
+    expect(urls.some((u) => u.includes("/api/machine/cli"))).toBe(true);
+    expect(urls.some((u) => u.includes("/api/machine/loop"))).toBe(true);
+    expect(legacyBody.ui).toBe(ui); // legacy body is the raw config
     expect(out.join("")).toContain("dashboard ui: applied");
   });
 

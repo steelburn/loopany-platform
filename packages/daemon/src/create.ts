@@ -14,6 +14,8 @@
  */
 import fs from "node:fs";
 
+import type { CliResponse, LegacyFallback } from "./cli-client.js";
+import { postCli } from "./cli-client.js";
 import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
 import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
 
@@ -175,14 +177,31 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   if (dryRun) body.dryRun = true;
 
   try {
-    const res = await fetchImpl(`${server}/api/machine/loop`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+    // The whole config travels as the unified `new --json <config>` verb; the legacy
+    // fallback (old server, no /api/machine/cli) POSTs the same body to the pre-batch-4
+    // `/api/machine/loop`. The connection was pre-checked above, so postCli is given the
+    // resolved device token + server explicitly (never falls to "not-configured" here).
+    const legacyCreate: LegacyFallback = async (ctx): Promise<CliResponse> => {
+      const res = await ctx.fetchImpl(`${ctx.server}/api/machine/loop`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${ctx.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+    };
+    const r = await postCli(["new", "--json", JSON.stringify(body)], legacyCreate, {
+      fetchImpl,
+      server,
+      deviceToken: token,
     });
-    const data = (await res.json().catch(() => ({}))) as CreateResponse;
-    if (!res.ok || !data.ok) {
-      process.stderr.write(`loopany: ${data.error || `create failed (${res.status})`}\n`);
+    if (r.kind !== "ok") {
+      const detail = r.kind === "network-error" ? r.message : r.kind === "read-error" ? `cannot read ${r.path}` : "machine not connected";
+      process.stderr.write(`loopany: ${detail}\n`);
+      return 1;
+    }
+    const data = r.body as CreateResponse;
+    if (r.status >= 400 || !data.ok) {
+      process.stderr.write(`loopany: ${data.error || `create failed (${r.status})`}\n`);
       return 1;
     }
     if (dryRun) {

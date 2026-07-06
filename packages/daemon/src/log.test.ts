@@ -1,8 +1,13 @@
 /**
  * `loopany log`, exercised with every external touch INJECTED (cwd, fetch, output,
  * server, token) so nothing reads a real ~/.loopany or hits the network. Proves it
- * resolves the loop for the current workdir, forwards an explicit loop arg, and
- * wires to the device-token-scoped `/api/machine/log` endpoint.
+ * resolves the loop for the current workdir, forwards an explicit loop arg, and wires
+ * to the run log.
+ *
+ * The `runLog` describe below uses a fetch stub that 404s any path but the two legacy
+ * routes (`/api/machine/loop`, `/api/machine/log`), so it exercises the **404 → legacy
+ * fallback** half of the compat matrix (an OLD server). The `runLog — unified
+ * /api/machine/cli` describe at the bottom covers the **NEW server** primary path.
  */
 import os from "node:os";
 import path from "node:path";
@@ -181,5 +186,60 @@ describe("runLog", () => {
     const cap = capture({ cwd: () => "/unrelated", fetchFn });
     expect(await runLog(["loop-x"], cap)).toBe(1);
     expect(cap.stderr()).toContain("no such loop");
+  });
+});
+
+/**
+ * NEW server: the unified `/api/machine/cli` POST dispatch answers BOTH the loops-list
+ * (to resolve the workdir → loop id, client-side) and the log fetch. This is the
+ * primary path; the describe above covers the 404 → legacy fallback.
+ */
+function stubUnified(loops: LoopStub[], runsFor: (argv: string[]) => { ok: boolean; status?: number; body: unknown }) {
+  const calls: Array<{ url: string; argv: string[] }> = [];
+  const fetchFn = (async (url: string, init: any) => {
+    const u = String(url);
+    const argv: string[] = init?.body ? (JSON.parse(init.body).argv ?? []) : [];
+    calls.push({ url: u, argv });
+    if (u.includes("/api/machine/cli") && argv[0] === "loops") {
+      return { ok: true, status: 200, json: async () => ({ ok: true, loops }) };
+    }
+    if (u.includes("/api/machine/cli") && argv[0] === "log") {
+      const r = runsFor(argv);
+      return { ok: r.ok, status: r.status ?? 200, json: async () => r.body };
+    }
+    return { ok: false, status: 404, json: async () => ({ error: "no route" }) };
+  }) as unknown as typeof fetch;
+  return { fetchFn, calls };
+}
+
+type LoopStub = { id: string; name: string; workdir: string | null; taskFile: string | null };
+
+describe("runLog — unified /api/machine/cli (new server)", () => {
+  const oneRun = [{ id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, sample: null, transcript: "$ Bash echo hi", transcriptTruncated: false }];
+
+  test("resolves the workdir loop and posts `loops` then `log <id>` to the unified endpoint", async () => {
+    const { fetchFn, calls } = stubUnified(
+      [{ id: "loop-here", name: "Here", workdir: loopDir, taskFile: null }],
+      () => ({ ok: true, body: { ok: true, name: "Here", runs: oneRun } }),
+    );
+    const cap = capture({ cwd: () => loopDir, fetchFn });
+    expect(await runLog([], cap)).toBe(0);
+    // Both round-trips went to the unified dispatch (POST {argv}), never the legacy GETs.
+    expect(calls.every((c) => c.url.includes("/api/machine/cli"))).toBe(true);
+    expect(calls[0]!.argv).toEqual(["loops"]);
+    expect(calls[1]!.argv).toEqual(["log", "loop-here"]);
+    expect(cap.stdout()).toContain("did the thing");
+    expect(cap.stdout()).toContain("session: sess-r1");
+  });
+
+  test("an explicit loop id + --limit forwards through the unified `log` argv", async () => {
+    const { fetchFn, calls } = stubUnified(
+      [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }],
+      () => ({ ok: true, body: { ok: true, name: "X", runs: [] } }),
+    );
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["loop-x", "--limit", "3"], cap)).toBe(0);
+    expect(calls[1]!.argv).toEqual(["log", "loop-x", "--limit", "3"]);
+    expect(cap.stdout()).toContain("no runs yet");
   });
 });

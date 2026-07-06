@@ -356,6 +356,48 @@ describe("runDelivery — the exec timeout is opt-in (unlimited by default)", ()
   }, 30000);
 });
 
+/** A fake claude that records EVERY arg it was handed (one per line) to
+ *  cwd/argv.txt, then emits a clean success — so a test can assert which flags the
+ *  runner did (or did not) pass. */
+function writeArgvClaude(): string {
+  const p = path.join(root, "argv-claude.sh");
+  fs.writeFileSync(
+    p,
+    [
+      "#!/bin/sh",
+      'printf "%s\\n" "$@" > argv.txt',
+      `echo '{"type":"result","is_error":false,"subtype":"success","result":"delivered","session_id":"sess-args"}'`,
+      "exit 0",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.chmodSync(p, 0o755);
+  return p;
+}
+
+describe("runDelivery — the system prompt file is skipped when empty (batches 1-2)", () => {
+  test("an EMPTY systemPrompt → no sys file, no --append-system-prompt-file flag", async () => {
+    process.env.LOOPANY_CLAUDE_BIN = writeArgvClaude();
+    const runsDir = path.join(process.env.LOOPANY_HOME || path.join(os.homedir(), ".loopany"), "runs");
+    await runDelivery(delivery({ systemPrompt: "", loop: { ...delivery().loop, workflow: null } }), "http://127.0.0.1:1/unused", []);
+    const args = fs.readFileSync(path.join(workdir, "argv.txt"), "utf8");
+    // The claude-only flag is gone — opens multi-agent execution (the task carries all).
+    expect(args).not.toContain("--append-system-prompt-file");
+    // …and no sys-<runId>.md was left behind (it was never written).
+    expect(fs.existsSync(path.join(runsDir, "sys-run-1.md"))).toBe(false);
+  }, 20000);
+
+  test("a POPULATED systemPrompt (old server) still writes the sys file and passes the flag", async () => {
+    process.env.LOOPANY_CLAUDE_BIN = writeArgvClaude();
+    await runDelivery(delivery({ systemPrompt: "SYSTEM PROMPT BODY", loop: { ...delivery().loop, workflow: null } }), "http://127.0.0.1:1/unused", []);
+    const args = fs.readFileSync(path.join(workdir, "argv.txt"), "utf8");
+    // Back-compat: an old server that still populates systemPrompt keeps working.
+    expect(args).toContain("--append-system-prompt-file");
+    expect(args).toMatch(/sys-run-1\.md/);
+  }, 20000);
+});
+
 describe("runDelivery — the local LOOPANY_ROOTS jail always applies", () => {
   test("server-sent roots cannot WIDEN the jail to admit an out-of-jail workdir (claude never runs)", async () => {
     process.env.LOOPANY_CLAUDE_BIN = writeFakeClaude();

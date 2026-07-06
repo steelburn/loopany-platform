@@ -369,6 +369,25 @@ computes pure functions. Run instructions: `README.md`.
   Claude today.
 - External touches (process/network/fs) are injectable seams throughout; tests never
   need a real process or network.
+- **Unified CLI transport `cli-client.ts` `postCli(argv, legacy, deps)`** (batch 5):
+  the ONE client behind BOTH CLI worlds. It selects the credential by env (run token
+  from `LOOPANY_RUN_TOKEN` wins, else the persisted device token), inlines the file
+  flags (`--message-file`→`--message`, `--state-file`→`--state-content`, `--file`→
+  `--file-content` — moved out of `callback.ts` so both credentials get it), and POSTs
+  `{argv}` to the unified `/api/machine/cli` (server batch 4). On a **404** (old server)
+  it invokes the per-credential `legacy` fallback — `legacyRun` → `/agent-api/loop` for
+  a run token; the caller-supplied device fallback (`/api/machine/loop` GET/POST/PATCH,
+  `/api/machine/log`) for owner verbs — one release of back-compat. `callback.ts` /
+  `interactive.ts` / `log.ts` / `create.ts` all converge onto it; the LOCAL verbs
+  (up/down/update/skill/status/help/version/bare-daemon) keep their own fast-paths and
+  never touch the server. `log`'s cwd→loop resolution stays CLIENT-side (lists loops,
+  then posts `log <id>`) because the server's `log` dispatch needs an explicit id.
+  This ships in the npm daemon package, so it needs a coordinated `@crewlet/loopany`
+  release. (The daemon still forwards whatever token its env carries — the `rk_` run
+  lease is batch 6, not here.)
+- **`runner.ts` skips the sys file + `--append-system-prompt-file` when the delivery's
+  `systemPrompt` is empty** (batches 1-2 make it empty; an OLD server that still
+  populates it keeps working — the flag path is preserved when the string is non-empty).
 
 ## Web UI gotchas
 

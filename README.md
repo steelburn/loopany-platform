@@ -62,8 +62,9 @@ talking to your local coding agent.
 ```
 ┌── Loopany server (TanStack Start · one process · zero code-exec · zero LLM) ──┐
 │  dashboard + server fns · Better Auth · in-process Scheduler (croner)          │
-│  machine routes: /api/machine/poll · /agent-api/loop · /machine/report          │
-│                  /api/machine/sync · /api/machine/blob/:hash (artifact sync)     │
+│  machine routes: /api/machine/cli (unified CLI dispatch) · /api/machine/poll     │
+│                  /machine/report · /api/machine/sync · /api/machine/blob/:hash    │
+│                  /agent-api/loop · /api/machine/loop|log (legacy CLI aliases)     │
 │  SQLite (Drizzle) on a volume · artifact bytes in object storage                 │
 └───────────▲ HTTP short-poll ────────────────────────────────────────────────────┘
             │

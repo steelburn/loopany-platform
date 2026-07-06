@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 
-import { buildPatch, parseFlags } from "./interactive.js";
+import { buildPatch, type InteractiveDeps, parseFlags, runInteractive } from "./interactive.js";
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), "loopany-edit-"));
 
@@ -73,5 +73,136 @@ describe("buildPatch", () => {
 
   test("no edit flags yields an empty patch", () => {
     expect(buildPatch(parseFlags([]).flags)).toEqual({});
+  });
+});
+
+/**
+ * `runInteractive` fetch path with the token/server/fetch INJECTED so nothing touches
+ * ~/.loopany. Proves `loops`/`edit` funnel through the unified `/api/machine/cli`
+ * dispatch (NEW server), AND fall back to the legacy `/api/machine/loop` GET/PATCH
+ * when the server 404s the unified endpoint (OLD server) — both halves of the matrix.
+ */
+function capture(extra: InteractiveDeps = {}): InteractiveDeps & { stdout: () => string; stderr: () => string } {
+  let out = "";
+  let err = "";
+  return {
+    out: (s) => { out += s; },
+    err: (s) => { err += s; },
+    server: "https://srv.test",
+    token: "dk_test",
+    stdout: () => out,
+    stderr: () => err,
+    ...extra,
+  };
+}
+
+/** A fetch stub recording each {url, method, argv?, body?}; unified when argv present. */
+function stub(handler: (req: { url: string; method: string; argv: string[]; parsedBody: any }) => { ok: boolean; status?: number; body: unknown }) {
+  const calls: Array<{ url: string; method: string; argv: string[]; parsedBody: any }> = [];
+  const fetchFn = (async (url: string, init: any) => {
+    const parsedBody = init?.body ? JSON.parse(init.body) : undefined;
+    const req = { url: String(url), method: init?.method ?? "GET", argv: parsedBody?.argv ?? [], parsedBody };
+    calls.push(req);
+    const r = handler(req);
+    return { ok: r.ok, status: r.status ?? 200, json: async () => r.body };
+  }) as unknown as typeof fetch;
+  return { fetchFn, calls };
+}
+
+describe("runInteractive — unified /api/machine/cli (new server)", () => {
+  test("loops → posts {argv:['loops']} with the device token and prints the loops", async () => {
+    const { fetchFn, calls } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "loops"
+        ? { ok: true, body: { ok: true, loops: [{ id: "loop-1", name: "Cookie", cron: "0 8 * * *", timezone: "UTC", enabled: true, notify: "smart", nextRunAt: null }] } }
+        : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["loops"], cap)).toBe(0);
+    expect(calls[0]!.url).toBe("https://srv.test/api/machine/cli");
+    expect(calls[0]!.argv).toEqual(["loops"]);
+    expect(cap.stdout()).toContain("loop-1");
+    expect(cap.stdout()).toContain("Cookie");
+  });
+
+  test("edit → posts {argv:['edit',id,'--json',<patch>]} and prints the applied summary", async () => {
+    const { fetchFn, calls } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "edit"
+        ? { ok: true, body: { ok: true, name: "Cookie", applied: ["cron"] } }
+        : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["edit", "loop-1", "--json", '{"cron":"0 9 * * *"}'], cap)).toBe(0);
+    expect(calls[0]!.argv).toEqual(["edit", "loop-1", "--json", '{"cron":"0 9 * * *"}']);
+    expect(cap.stdout()).toContain("updated Cookie");
+    expect(cap.stdout()).toContain("cron");
+  });
+
+  test("edit --dry-run → the unified endpoint's dryRun preview renders", async () => {
+    const { fetchFn, calls } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "edit"
+        ? { ok: true, body: { dryRun: true, name: "Cookie", changes: [{ key: "cron", from: "0 8 * * *", to: "0 9 * * *" }], rejections: [] } }
+        : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["edit", "loop-1", "--json", '{"cron":"0 9 * * *"}', "--dry-run"], cap)).toBe(0);
+    expect(calls[0]!.argv).toContain("--dry-run");
+    expect(cap.stdout()).toContain("dry-run");
+    expect(cap.stdout()).toContain("0 9 * * *");
+  });
+});
+
+describe("runInteractive — legacy fallback (old server 404s the unified dispatch)", () => {
+  test("loops falls back to GET /api/machine/loop", async () => {
+    const { fetchFn, calls } = stub(({ url }) =>
+      url.includes("/api/machine/cli")
+        ? { ok: false, status: 404, body: { error: "not found" } }
+        : { ok: true, body: { loops: [{ id: "loop-1", name: "Cookie", cron: "0 8 * * *", timezone: null, enabled: false, notify: "smart", nextRunAt: null }] } },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["loops"], cap)).toBe(0);
+    expect(calls[0]!.url).toContain("/api/machine/cli");
+    expect(calls[1]!.url).toBe("https://srv.test/api/machine/loop");
+    expect(calls[1]!.method).toBe("GET");
+    expect(cap.stdout()).toContain("loop-1");
+    expect(cap.stdout()).toContain("paused"); // enabled:false
+  });
+
+  test("edit falls back to PATCH /api/machine/loop with the {id, patch, dryRun} body", async () => {
+    const { fetchFn, calls } = stub(({ url }) =>
+      url.includes("/api/machine/cli")
+        ? { ok: false, status: 404, body: { error: "not found" } }
+        : { ok: true, body: { ok: true, name: "Cookie", applied: ["goal"] } },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["edit", "loop-1", "--json", '{"goal":"ship v1"}'], cap)).toBe(0);
+    const patchCall = calls.find((c) => c.method === "PATCH")!;
+    expect(patchCall.url).toBe("https://srv.test/api/machine/loop");
+    expect(patchCall.parsedBody).toEqual({ id: "loop-1", patch: { goal: "ship v1" }, dryRun: false });
+    expect(cap.stdout()).toContain("updated Cookie");
+  });
+});
+
+describe("runInteractive — local guards (no fetch)", () => {
+  test("not connected → exit 2 with a clear message, no fetch", async () => {
+    const { fetchFn, calls } = stub(() => ({ ok: true, body: {} }));
+    const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined });
+    expect(await runInteractive(["loops"], cap)).toBe(2);
+    expect(cap.stderr()).toContain("isn't connected");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("edit with no id → usage, exit 2, no fetch", async () => {
+    const { fetchFn, calls } = stub(() => ({ ok: true, body: {} }));
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["edit"], cap)).toBe(2);
+    expect(cap.stderr()).toContain("usage");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("an unknown interactive verb → exit 2", async () => {
+    const { fetchFn } = stub(() => ({ ok: true, body: {} }));
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["bogus"], cap)).toBe(2);
+    expect(cap.stderr()).toContain("unknown command");
   });
 });
