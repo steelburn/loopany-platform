@@ -994,12 +994,28 @@ export class MachineGateway {
       const rawMessage = body.message !== undefined ? body.message : body.finalText;
       const message = typeof rawMessage === "string" ? rawMessage.slice(0, MESSAGE_CAP) : undefined;
       const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
+      // Only a SUCCESSFUL reconcile carries the workflow cursor forward — same as
+      // the normal path, a failed run must never advance loop.state (the next run's
+      // `prev` would bind data whose output the user never saw). Bounded by
+      // CURSOR_CAP; an over-cap cursor is dropped, the run still reconciles.
+      let cursor = ok ? body.cursor : undefined;
+      if (cursor !== undefined) {
+        const serialized = JSON.stringify(cursor);
+        if ((serialized?.length ?? 0) > CURSOR_CAP) {
+          log.warn({ runId: slot.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
+          cursor = undefined;
+        }
+      }
       if (typeof body.taskFileContent === "string") {
         store.updateLoop(slot.loopId, {
           taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
           taskFileSyncedAt: nowIso(),
         });
       }
+      if (cursor !== undefined) store.updateLoop(slot.loopId, { state: cursor });
+      // Mirror the workflow's scalar cursor onto THIS run for {{latest.*}} / the
+      // trend chart — don't clobber a state the run already reported.
+      const runState = ok && !run.state ? scalarState(cursor) : undefined;
       const finalized = store.updateRun(slot.runId, {
         phase: ok ? "done" : "error",
         outcome: ok ? claimedOutcome ?? (slot.role === "evolve" ? "evolve" : "exec") : "error",
@@ -1007,6 +1023,7 @@ export class MachineGateway {
         ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
         ...(artifacts ? { artifacts } : {}),
         ...(transcript ? { transcript } : {}),
+        ...(runState ? { state: runState } : {}),
         ...(message !== undefined ? { message } : {}),
         // Success clears the generic reclaim reason; a genuine late failure REPLACES
         // it with the real error (honest record), keeping the run an error.

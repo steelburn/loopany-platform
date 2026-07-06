@@ -134,6 +134,39 @@ test("(a') a late FAILURE report records the real error honestly, without a seco
   expect(sent).toHaveLength(1);
 });
 
+test("(a'') a successful late reconcile advances loop.state and mirrors the scalar cursor onto run.state", () => {
+  const gw = gateway(() => Promise.resolve());
+  const { machineId, loop } = seedMachineLoop(21 * MIN);
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
+  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+
+  gw.sweep();
+  expect(store.getRun(run.id)!.phase).toBe("error");
+
+  // A workflow-style run wakes and reports success with a cursor.
+  const res = gw.report(rt, { ok: true, message: "sweep done", cursor: { processed: 7, sha: "abc123" } });
+  expect(res.status).toBe(200);
+  // The workflow cursor advanced loop.state (next run's `prev` binding).
+  expect(store.getLoop(loop.id)!.state).toEqual({ processed: 7, sha: "abc123" });
+  // The scalar cursor is mirrored onto run.state for {{latest.*}} / the trend chart.
+  expect(store.getRun(run.id)!.state).toEqual({ processed: 7, sha: "abc123" });
+});
+
+test("(a''') a FAILED late reconcile does NOT advance loop.state (no reprocess/skip hazard)", () => {
+  const gw = gateway(() => Promise.resolve());
+  const { machineId, loop } = seedMachineLoop(21 * MIN);
+  const run = store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
+  const rt = tokens.registerRunToken({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+
+  gw.sweep();
+  const res = gw.report(rt, { ok: false, error: "workflow blew up", cursor: { processed: 7 } });
+  expect(res.status).toBe(200);
+  expect(store.getRun(run.id)!.phase).toBe("error");
+  // A failed run must never advance the cursor — same as the normal path.
+  expect(store.getLoop(loop.id)!.state ?? null).toBeNull();
+  expect(store.getRun(run.id)!.state ?? null).toBeNull();
+});
+
 test("(b) a pending run reclaimed as machine-offline is unchanged (no live token to reconcile)", () => {
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
