@@ -65,6 +65,20 @@ computes pure functions. Run instructions: `README.md`.
   as `Goal (finish line): <goal>` (an own-line fill, `{{goalLine}}`). The old standing
   system prompt `skill/run/exec-loop.md` is retained as the source for the later
   skill-side `references/run.md` batch but is no longer imported or delivered.
+- The EVOLVE and EDIT runs follow the SAME first-user-turn model (Batch 2):
+  `buildEvolvePrompt`/`buildEditPrompt` both return `""` (empty system prompt, same
+  harmless-no-op rationale as exec), and the standing prose ships in the user turn -
+  `buildEvolveTask` concatenates `references/evolve.md` ahead of its payload,
+  `buildEditTask` concatenates the short `run/edit.md` CORE ahead of its payload. The
+  untrusted-data guard rides along in that prose (evolve reads run messages; edit reads
+  the loop's current config - both untrusted). `buildEvolveTask` no longer dumps up to
+  12 runs as pretty-printed JSON; it emits a COMPACT one-line-per-run survey
+  (`renderRecentRuns`: ts / role / outcome-status / cost as `$x.xx` / state KEYS only,
+  not values / FULL session id so the `find … <session>.jsonl` deep-dive resolves /
+  message collapsed + clipped to ~100 chars), headed by on-demand pointers
+  (`loopany log [--transcript]`, now reachable in-run, + the local session JSONL).
+  `buildEditTask` KEEPS its inlined current ui/workflow/schema - that is current CONFIG,
+  not history, and is useful for a surgical edit.
 - `allowControl` defaults TRUE; `false` means the owner pins the schedule. A run's
   self-schedule surface is only `reschedule` + `set-cron`, with cadence floors
   (`LOOPANY_SELF_CRON_FLOOR_MINUTES`, `LOOPANY_SELF_RESCHEDULE_FLOOR_MINUTES`)

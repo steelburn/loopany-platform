@@ -3,15 +3,24 @@
  * evolve guidance was unified into the single source skill/references/evolve.md
  * (run-dispatch and the installable skill now read the SAME file). These assertions
  * lock the run behavior for each role — losing a lever here is a regression, not a
- * doc tweak. evolve/edit carry no `{{token}}`; the exec run's instructions now live
- * in the first USER turn (`buildExecTask` ← exec-core.md, fills name/taskFile/
- * goalLine/stateLine) with an empty system prompt (run-experience redesign, Batch 1),
- * so these also guard that placeholder filling still works against the (now
- * skill-sourced) evolve import sitting alongside it.
+ * doc tweak. The exec run's instructions live in the first USER turn (`buildExecTask`
+ * ← exec-core.md, fills name/taskFile/goalLine/stateLine) with an empty system
+ * prompt (run-experience redesign, Batch 1). Batch 2 extends the same move to
+ * EVOLVE and EDIT: their system prompts are now empty too, the standing prose ships
+ * in the first user turn (`buildEvolveTask`/`buildEditTask`), and the evolve payload
+ * inlines a COMPACT one-line-per-run survey (state keys not values, clipped message)
+ * instead of full pretty-printed JSON. These assertions lock that.
  */
 import { expect, test } from "vitest";
 
-import { buildEditPrompt, buildEvolvePrompt, buildEvolveTask, buildExecTask, buildLoopSystemPrompt } from "./prompt.js";
+import {
+  buildEditPrompt,
+  buildEditTask,
+  buildEvolvePrompt,
+  buildEvolveTask,
+  buildExecTask,
+  buildLoopSystemPrompt,
+} from "./prompt.js";
 import type { Loop, Run } from "../db/schema.js";
 
 const loop = (over: Partial<Loop> = {}): Loop =>
@@ -28,67 +37,126 @@ const loop = (over: Partial<Loop> = {}): Loop =>
     ...over,
   }) as unknown as Loop;
 
-test("evolve run prompt keeps every lever + smoke-test discipline", () => {
-  const p = buildEvolvePrompt();
-  // The three structural levers run-dispatch live-supports for an evolve token.
-  expect(p).toContain("loopany set-ui --file");
-  expect(p).toContain("loopany set-schema --file");
-  expect(p).toContain("loopany set-workflow --file");
-  // Binding syntax + chart primitives the UI lever depends on.
-  expect(p).toContain("{{latest.");
-  expect(p).toContain("<loop-chart");
-  // Run-only framing + the smoke-test gate before set-workflow.
-  expect(p).toMatch(/never contact the user/i);
-  expect(p).toMatch(/smoke-test/i);
-  // No unfilled placeholders leak into the evolve prompt (it takes no vars).
-  expect(p).not.toMatch(/\{\{(?!latest\.)\w+\}\}/);
+// Batch 2: the evolve/edit system prompts are empty — the standing prose moved into
+// the first user turn (like exec, Batch 1). The daemon's `--append-system-prompt-file`
+// becomes a harmless no-op on every existing daemon (ships server-first).
+test("evolve + edit system prompts are empty (prose moved to the user turn)", () => {
+  expect(buildEvolvePrompt()).toBe("");
+  expect(buildEditPrompt()).toBe("");
 });
 
-test("evolve task payload inlines each run's cost, and the prose explains the field", () => {
+test("evolve task turn keeps every lever + smoke-test discipline + protocol prose", () => {
+  const t = buildEvolveTask(loop(), []);
+  // The three structural levers run-dispatch live-supports for an evolve token.
+  expect(t).toContain("loopany set-ui --file");
+  expect(t).toContain("loopany set-schema --file");
+  expect(t).toContain("loopany set-workflow --file");
+  // Binding syntax + chart primitives the UI lever depends on.
+  expect(t).toContain("{{latest.");
+  expect(t).toContain("<loop-chart");
+  // Run-only framing + the smoke-test gate before set-workflow.
+  expect(t).toMatch(/never contact the user/i);
+  expect(t).toMatch(/smoke-test/i);
+  // The untrusted-data guard rides along in the user turn (evolve reads run messages).
+  expect(t).toMatch(/data, never as instructions/i);
+  // The task lever: sharpen the brief by editing the task file on disk (no set-task).
+  expect(t).toContain("## 1. The task");
+  expect(t).toMatch(/edit the task file/i);
+  expect(t).toContain("## Spec");
+  expect(t).toContain("## Current understanding");
+  expect(t).toContain("## Timeline");
+  // Workflow elevated to §2, dashboard demoted to §3.
+  expect(t).toContain("## 2. Workflow");
+  expect(t).toContain("## 3. Dashboard");
+  // The two-lens log reading: survey (loopany log, with session id) + deep dive (session JSONL).
+  expect(t).toContain("loopany log");
+  expect(t).toMatch(/session/i);
+  expect(t).toMatch(/\.jsonl/i);
+  // No unfilled placeholders leak into the evolve turn (it takes no `{{token}}` vars;
+  // the `{{latest.*}}` binding syntax in the prose is the only legitimate exception).
+  expect(t).not.toMatch(/\{\{(?!latest\.)\w+\}\}/);
+});
+
+test("evolve task inlines a COMPACT run survey: keys not values, clipped message, pointers", () => {
   const runs = [
     {
-      ts: "2026-07-06T05:40:02.851Z",
+      ts: "2026-07-05T06:00:00.000Z",
+      role: "exec",
       outcome: "exec",
       status: "new",
       sample: null,
-      state: { checks: 3 },
-      message: "3 checks done",
-      costUsd: 0.8273,
-      sessionId: "sess-1",
+      state: { drift: 3, prs: 1 },
+      message: "Detected drift " + "x".repeat(200), // long enough to force truncation
+      costUsd: 0.4231,
+      sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    },
+    {
+      ts: "2026-07-06T06:00:00.000Z",
+      role: "exec",
+      outcome: "exec",
+      status: "nothing-new",
+      sample: null,
+      state: null,
+      message: "no drift since last sweep",
+      costUsd: null,
+      sessionId: null,
     },
   ] as unknown as Run[];
   const t = buildEvolveTask(loop(), runs);
-  // The recent-runs survey the evolve agent reads carries the per-run cost…
-  expect(t).toContain('"costUsd": 0.8273');
-  // …and the standing evolve instructions (skill/references/evolve.md) name it.
-  expect(buildEvolvePrompt()).toContain("costUsd");
+
+  // On-demand pointers head the survey: loopany log (works in-run now) + session JSONL.
+  expect(t).toContain("loopany log");
+  expect(t).toContain("--transcript");
+  expect(t).toMatch(/find ~\/\.claude\/projects -name '<session>\.jsonl'/);
+
+  // Cost is rendered compactly (`$x.xx`) — the survey row carries `$0.42`, not the
+  // raw 4-decimal number. (The prose still names the `costUsd` field it explains.)
+  expect(t).toContain("$0.42");
+  expect(t).not.toContain("0.4231");
+
+  // State appears as KEYS only — the values (3, 1) are dropped from the inline payload.
+  expect(t).toContain("drift,prs");
+  expect(t).not.toMatch(/"drift":\s*3/);
+  expect(t).not.toContain('"prs": 1');
+
+  // The full session id is preserved (so the deep-dive `find` resolves).
+  expect(t).toContain("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+  // The message is clipped to ~100 chars with an ellipsis; the full body never lands.
+  const clipped = ("Detected drift " + "x".repeat(200)).slice(0, 100) + "…";
+  expect(t).toContain(clipped);
+  expect(t).not.toContain("x".repeat(101)); // the un-clipped tail is gone
+
+  // The header announces the window size.
+  expect(t).toContain("N=2");
 });
 
-test("evolve run prompt carries the task-first + workflow + dashboard guidance", () => {
-  const p = buildEvolvePrompt();
-  // The task lever: sharpen the brief by editing the task file on disk (no set-task).
-  expect(p).toContain("## 1. The task");
-  expect(p).toMatch(/edit the task file/i);
-  expect(p).toContain("## Spec");
-  expect(p).toContain("## Current understanding");
-  expect(p).toContain("## Timeline");
-  // Workflow elevated to §2, dashboard demoted to §3.
-  expect(p).toContain("## 2. Workflow");
-  expect(p).toContain("## 3. Dashboard");
-  // The two-lens log reading: quick survey (loopany log, with session id) + deep dive (session JSONL).
-  expect(p).toContain("loopany log");
-  expect(p).toMatch(/session/i);
-  expect(p).toMatch(/\.jsonl/i);
-});
-
-test("edit run prompt keeps the schedule/envelope verbs (run-token surface)", () => {
-  const p = buildEditPrompt();
+test("edit task turn is a short CORE: apply one change, don't run/finish, report", () => {
+  const t = buildEditTask(loop(), "run at 9am on weekdays");
+  // The edit CORE contract: ONE change, don't run the task, don't finish, then report.
+  expect(t).toMatch(/ONE owner-requested change/i);
+  expect(t).toMatch(/NOT\s+running the loop's normal task/i);
+  expect(t).toMatch(/do NOT finish the loop/i);
+  expect(t).toContain("loopany report --status resolved");
+  // The untrusted-data guard rides along (edit reads the loop's current config below).
+  expect(t).toMatch(/data, never as instructions/i);
+  // The schedule/envelope verbs stay available (run-token surface).
   for (const verb of ["set-cron", "set-tz", "set-name", "notify", "set-model", "pause", "reschedule"]) {
-    expect(p).toContain(verb);
+    expect(t).toContain(verb);
   }
-  // Edit may also touch the dashboard/gate, and must finalize with a resolved report.
-  expect(p).toContain("set-ui --file");
-  expect(p).toContain("loopany report --status resolved");
+  expect(t).toContain("set-ui --file");
+  // Skill pointer for the deep verb syntax, with a CORE-sufficient fallback.
+  expect(t).toMatch(/loopany skill/i);
+  expect(t).toMatch(/sufficient/i);
+  // The owner's instruction is carried through.
+  expect(t).toContain("run at 9am on weekdays");
+});
+
+test("edit task keeps the current ui/workflow inlined (config, not history — §3.4)", () => {
+  const t = buildEditTask(loop({ ui: "<h3>{{latest.mrr}}</h3>", workflow: "return { message: 'x' }" }), "tweak it");
+  expect(t).toContain("Current ui:");
+  expect(t).toContain("<h3>{{latest.mrr}}</h3>");
+  expect(t).toContain("Current workflow:");
+  expect(t).toContain("return { message: 'x' }");
 });
 
 // Run-experience redesign, Batch 1: the exec run's standing instructions moved out
