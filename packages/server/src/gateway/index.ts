@@ -1316,7 +1316,7 @@ export class MachineGateway {
     if (!current || current.goal == null) {
       return { ok: false, detail: "this loop no longer has a goal to finish — its goal was cleared since this run started" };
     }
-    // Idempotency: the run token stays live for the enriching report, so a second
+    // Idempotency: the run lease stays active for the enriching report, so a second
     // `finish` on the same run is possible — refuse it so completion stays single-shot.
     if (current.completedAt != null) {
       return { ok: false, detail: "this loop is already finished" };
@@ -1359,7 +1359,7 @@ export class MachineGateway {
 
   /**
    * Live artifact sync (Bearer DEVICE token — the durable machine identity, NOT
-   * the run token which is revoked at run end; live sync runs continuously,
+   * the run lease which is retired at run end; live sync runs continuously,
    * including between runs and on idle-time human edits). The daemon posts the
    * FULL current manifest of a loop's folder plus optional inline bytes for small
    * files; the server stores verified blobs in R2, reconciles `artifact_files`
