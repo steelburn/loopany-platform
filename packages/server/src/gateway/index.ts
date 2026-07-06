@@ -716,16 +716,20 @@ export class MachineGateway {
       if (unknown.length) {
         return { status: 400, body: { error: `unknown field(s): ${unknown.join(", ")} — available: ${LIST_OPTIONAL_FIELDS.join(", ")}` } };
       }
-      // Preserve request order, dedup, and never re-list a default column.
-      for (const f of requested) if (!extras.includes(f) && !LIST_DEFAULT_FIELDS.includes(f)) extras.push(f);
+      // Preserve request order and dedup.
+      for (const f of requested) if (!extras.includes(f)) extras.push(f);
     }
     const fields = [...LIST_DEFAULT_FIELDS, ...extras];
+    // The derived cells cost an extra query per loop; only pay for them when the
+    // column is actually selected (the default `loopany loops` computes neither).
+    const wantRuns = fields.includes("runs");
+    const wantLastOutcome = fields.includes("lastOutcome");
 
     const loops: LoopListRecord[] = store.loopsForMachine(machineId).map((l) => {
       // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
       // paused loop shows no next fire (— in the cell), matching §4.2.
       const nextFire = l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null;
-      const last = store.listRuns(l.id, 1)[0];
+      const last = wantLastOutcome ? store.lastRun(l.id) : undefined;
       return {
         id: l.id,
         name: l.name ?? l.id,
@@ -741,7 +745,7 @@ export class MachineGateway {
         // directory back to a loop the same way the watcher resolves it.
         workdir: l.workdir ?? null,
         nextFire,
-        runs: store.countRuns(l.id),
+        runs: wantRuns ? store.countRuns(l.id) : 0,
         lastOutcome: last ? runOutcomeToken(last) : null,
       };
     });
