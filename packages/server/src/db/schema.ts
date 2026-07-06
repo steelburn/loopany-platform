@@ -41,6 +41,17 @@ export interface RunArtifact {
   kind: "created" | "edited";
 }
 
+/** Token-usage breakdown reported alongside a run's cost (all optional — an
+ *  older daemon / a timed-out run reports none). Rides in a JSON column; the
+ *  aggregable USD figure gets its own real column (`runs.costUsd`). */
+export interface RunUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  numTurns?: number;
+}
+
 /** One slimmed step of a claude run's execution trace (daemon parses it from the
  *  machine's transcript and pushes it up; the run-detail view renders the list). */
 export interface TranscriptStep {
@@ -225,6 +236,12 @@ export const runs = sqliteTable(
     control: text("control", { mode: "json" }).$type<ControlAction[]>(),
     /** claude session id on the machine (locates the transcript; MVP doesn't read it). */
     sessionId: text("session_id"),
+    /** Claude's own USD estimate for this run (the CLI's `total_cost_usd`). A real
+     *  column (not JSON) so per-loop totals are one SUM. Null: workflow-only run,
+     *  older daemon, or the run never reached a terminal result event. */
+    costUsd: real("cost_usd"),
+    /** Token-count breakdown reported with the cost (display-only detail). */
+    usage: text("usage", { mode: "json" }).$type<RunUsage>(),
     /** Files the run's claude session created/edited (parsed from its transcript). */
     artifacts: text("artifacts", { mode: "json" }).$type<RunArtifact[]>(),
     /** Slimmed execution trace (text/tool/result steps the daemon parsed from the

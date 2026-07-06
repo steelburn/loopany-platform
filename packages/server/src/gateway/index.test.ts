@@ -241,6 +241,51 @@ test("report persists the slimmed transcript, retrievable by session id", () => 
   ]);
 });
 
+test("report persists the claude-reported cost (usd column + usage json), rejecting garbage fields", () => {
+  const { loop, machine, run } = seededLoop();
+  const token = tokens.registerRunToken({
+    runId: run.id,
+    loopId: loop.id,
+    machineId: machine.id,
+    role: "exec",
+    allowControl: false,
+  });
+  const res = gateway().report(token, {
+    ok: true,
+    durationMs: 1000,
+    cost: {
+      usd: 0.4235,
+      inputTokens: 120,
+      outputTokens: 950,
+      cacheReadTokens: 48000,
+      numTurns: 12,
+      cacheCreationTokens: -5, // negative → dropped
+    },
+  });
+  expect(res.status).toBe(200);
+
+  const stored = store.getRun(run.id);
+  expect(stored?.costUsd).toBe(0.4235);
+  expect(stored?.usage).toEqual({ inputTokens: 120, outputTokens: 950, cacheReadTokens: 48000, numTurns: 12 });
+});
+
+test("report with an absent or wholly-garbage cost leaves the cost columns null", () => {
+  const { loop, machine, run } = seededLoop();
+  const token = tokens.registerRunToken({
+    runId: run.id,
+    loopId: loop.id,
+    machineId: machine.id,
+    role: "exec",
+    allowControl: false,
+  });
+  // usd over the sanity ceiling + non-numeric tokens → everything dropped.
+  const res = gateway().report(token, { ok: true, durationMs: 5, cost: { usd: 99_999_999, inputTokens: "lots" } });
+  expect(res.status).toBe(200);
+  const stored = store.getRun(run.id);
+  expect(stored?.costUsd).toBeNull();
+  expect(stored?.usage).toBeNull();
+});
+
 test("report syncs the machine's task file content onto the loop", () => {
   const { loop, machine, run } = seededLoop();
   const token = tokens.registerRunToken({

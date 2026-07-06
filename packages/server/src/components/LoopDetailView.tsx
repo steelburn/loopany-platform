@@ -3,7 +3,7 @@ import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../types'
 import { buildEditPrompt, loopDir } from '../lib/editPrompt'
-import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, tsShort, until } from '../lib/format'
+import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, money, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
@@ -457,12 +457,25 @@ export function LoopDetailView({ id }: { id: string }) {
     <div className="flex flex-wrap items-center gap-2">
       <button
         className={btnPrimary}
-        disabled={busy || !online || completed}
+        disabled={busy || !online || completed || s.running}
         onClick={onRun}
-        title={completed ? 'Loop completed - reopen it to run again' : offlineHint ?? (job.exec ? 'Spends credits' : undefined)}
+        title={
+          s.running
+            ? 'A run is already in progress'
+            : completed
+              ? 'Loop completed - reopen it to run again'
+              : offlineHint ?? (job.exec ? 'Spends credits' : undefined)
+        }
         aria-label={job.exec ? 'Run once - spends credits' : 'Run once'}
       >
-        {pending === 'run' ? 'Running…' : 'Run once'}
+        {pending === 'run' || s.running ? (
+          <span className="inline-flex items-center gap-2">
+            <span aria-hidden className="size-1.5 rounded-full bg-current" style={runPulseStyle} />
+            Running…
+          </span>
+        ) : (
+          'Run once'
+        )}
       </button>
       <button
         className={btn}
@@ -810,6 +823,11 @@ function RunsSection({
     <section className="min-w-0">
       <div className="mb-2.5 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">
         <h2 className={sectionHeadCls}>Runs ({summary.runCount})</h2>
+        {summary.totalCostUsd != null && (
+          <span className="font-mono text-caption text-disabled" title="Total claude-reported spend across all runs">
+            {money(summary.totalCostUsd)} total
+          </span>
+        )}
       </div>
 
       {summary.runCount === 0 ? (
@@ -835,7 +853,10 @@ function RunsSection({
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline justify-between gap-2">
                       <span className="font-mono text-label text-secondary">{tsShort(x.ts)}</span>
-                      <span className="shrink-0 font-mono text-caption text-disabled">{dur(x.durationMs)}</span>
+                      <span className="shrink-0 font-mono text-caption text-disabled">
+                        {x.costUsd != null ? `${money(x.costUsd)} · ` : ''}
+                        {dur(x.durationMs)}
+                      </span>
                     </span>
                     <span className="mt-0.5 block">
                       {x.running && x.progress ? (

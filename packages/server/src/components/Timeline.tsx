@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
 import type { JobSummary, RunSummary } from '../types'
-import { dotColor, dotLabel, dur, fmt, isCompleted, until } from '../lib/format'
+import { dotColor, dotLabel, dur, fmt, isCompleted, money, until } from '../lib/format'
 import { runPulseAnim, useHydrated } from './ui'
 
 /*
@@ -25,7 +25,9 @@ const SEG = `h-5 w-[18px] shrink-0 ${RAD}` // one run block
 
 function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
   const body = run.error || run.message || ''
-  const meta = run.durationMs ? ` · ${dur(run.durationMs)}` : ''
+  const meta =
+    (run.durationMs ? ` · ${dur(run.durationMs)}` : '') +
+    (run.costUsd != null ? ` · ${money(run.costUsd)}` : '')
   return (
     <Tooltip.Root>
       <Tooltip.Trigger

@@ -16,6 +16,7 @@ function job(over: Partial<JobSummary>): JobSummary {
     graduation: null,
     runs: [],
     runCount: 0,
+    totalCostUsd: null,
     ...over,
   }
 }

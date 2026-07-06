@@ -40,6 +40,18 @@ export interface Delivery {
   task: string;
 }
 
+/** Claude-reported spend/usage for one run, lifted from the terminal `result`
+ *  event (total_cost_usd + usage token counts + num_turns). All optional — an
+ *  older claude / a timed-out run may carry none of it. */
+export interface RunCost {
+  usd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  numTurns?: number;
+}
+
 interface ReportBody {
   runId: string;
   ok: boolean;
@@ -49,6 +61,8 @@ interface ReportBody {
   /** Workflow cursor (free-form) to persist as loop.state for next run's `prev`. */
   cursor?: unknown;
   sessionId?: string;
+  /** Claude-reported cost/usage for this run (absent for workflow-only runs). */
+  cost?: RunCost;
   /** Files this run's claude session created/edited (parsed from its transcript). */
   artifacts?: RunArtifact[];
   /** Slimmed execution trace (text/tool/result steps) for the run-detail view. */
@@ -79,6 +93,34 @@ interface ClaudeJson {
   subtype?: string;
   result?: string;
   session_id?: string;
+  total_cost_usd?: number;
+  num_turns?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+}
+
+/** A finite non-negative number, else undefined (untrusted parse of claude's JSON). */
+function nonNeg(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
+}
+
+/** Distill the terminal `result` event's cost/usage fields into a RunCost, or
+ *  undefined when the event carried none of them. Exported for tests. */
+export function costFromResult(j: ClaudeJson): RunCost | undefined {
+  const u = j.usage ?? {};
+  const cost: RunCost = {
+    usd: nonNeg(j.total_cost_usd),
+    inputTokens: nonNeg(u.input_tokens),
+    outputTokens: nonNeg(u.output_tokens),
+    cacheReadTokens: nonNeg(u.cache_read_input_tokens),
+    cacheCreationTokens: nonNeg(u.cache_creation_input_tokens),
+    numTurns: nonNeg(j.num_turns),
+  };
+  return Object.values(cost).some((v) => v !== undefined) ? cost : undefined;
 }
 
 export async function runDelivery(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<void> {
@@ -158,6 +200,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   let sessionId: string | undefined;
   let error: string | undefined;
   let finalText: string | undefined;
+  let cost: RunCost | undefined;
   // System prompt goes in ~/.loopany/runs (passed to claude by absolute path), not
   // the workdir — keeps the run's cwd clean. Removed in `finally`.
   const runsDir = path.join(LOOPANY_DIR, "runs");
@@ -205,6 +248,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       ok = !final.json.is_error && r.code === 0;
       sessionId = final.sessionId ?? final.json.session_id;
       finalText = final.json.result?.trim() || undefined;
+      cost = costFromResult(final.json);
       if (!ok) error = final.json.subtype || "claude reported an error";
     } else if (r.code === 0) {
       ok = true;
@@ -237,6 +281,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     durationMs: Date.now() - start,
     outcome: d.role === "evolve" ? "evolve" : "exec",
     sessionId,
+    cost,
     artifacts,
     transcript,
     taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
@@ -434,7 +479,15 @@ export function makeStreamConsumer(onProgress: (p: { step: number; label: string
     }
     if (typeof ev.session_id === "string" && !out.sessionId) out.sessionId = ev.session_id;
     if (ev.type === "result") {
-      out.json = { is_error: ev.is_error, subtype: ev.subtype, result: ev.result, session_id: ev.session_id };
+      out.json = {
+        is_error: ev.is_error,
+        subtype: ev.subtype,
+        result: ev.result,
+        session_id: ev.session_id,
+        total_cost_usd: ev.total_cost_usd,
+        num_turns: ev.num_turns,
+        usage: ev.usage,
+      };
     } else if (ev.type === "assistant" && Array.isArray(ev.message?.content)) {
       for (const b of ev.message.content) {
         const label = labelForBlock(b);

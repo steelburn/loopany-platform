@@ -41,6 +41,17 @@ export interface RunSummary {
   status: RunStatus | null
   message: string | null
   durationMs: number | null
+  /** Claude-reported spend for this run (USD estimate); null for workflow-only
+   *  runs, older daemons, or runs that never reached a terminal result. */
+  costUsd: number | null
+  /** Token-count breakdown reported with the cost (display-only detail). */
+  usage: {
+    inputTokens?: number
+    outputTokens?: number
+    cacheReadTokens?: number
+    cacheCreationTokens?: number
+    numTurns?: number
+  } | null
   error: string | null
   sample: number | string | null
   state: Record<string, Json> | null
@@ -114,6 +125,9 @@ export interface JobSummary {
   /** Total runs for this loop. The timeline's "+N" pager and the "N runs" label
    *  reflect this, not just the loaded page length. */
   runCount: number
+  /** Lifetime claude-reported spend across all runs (USD estimate, SUM over the
+   *  run rows); null when no run has reported a cost yet. */
+  totalCostUsd: number | null
 }
 
 /** Per-round observed metric declared on a job, used to label the trend chart. */

@@ -39,6 +39,8 @@ interface RunRow {
   outcome: string | null;
   status: string | null;
   durationMs: number | null;
+  /** Claude-reported spend for this run (USD estimate); null for older runs. */
+  costUsd?: number | null;
   error: string | null;
   message: string | null;
   // The claude-code session id behind this run — lets the reader jump to its
@@ -137,7 +139,8 @@ function resolveLoopId(
 function formatRun(r: RunRow, showTranscript: boolean): string {
   const outcome = r.phase === "done" ? (r.outcome ?? "done") : r.phase;
   const dur = r.durationMs != null ? ` · ${(r.durationMs / 1000).toFixed(1)}s` : "";
-  const head = `● ${r.ts}  ${r.role}  ${outcome}${dur}`;
+  const cost = r.costUsd != null ? ` · $${r.costUsd.toFixed(2)}` : "";
+  const head = `● ${r.ts}  ${r.role}  ${outcome}${dur}${cost}`;
   const lines = [head];
   if (r.sessionId) lines.push(`  session: ${r.sessionId}`);
   const metrics: string[] = [];

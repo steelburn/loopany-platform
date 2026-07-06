@@ -216,6 +216,17 @@ export function countRuns(loopId: string): number {
   return r?.n ?? 0;
 }
 
+/** Total claude-reported spend across ALL of a loop's runs (one SUM over the
+ *  real cost column). Null ⇒ no run has reported a cost yet. */
+export function sumRunCost(loopId: string): number | null {
+  const r = db
+    .select({ total: sql<number | null>`sum(${runs.costUsd})` })
+    .from(runs)
+    .where(eq(runs.loopId, loopId))
+    .get();
+  return r?.total ?? null;
+}
+
 /**
  * Count consecutive FAILED exec runs ending at the loop's most recent finalized
  * exec run. Drives the failure-alert anti-spam cadence (`shouldNotifyFailure`)

@@ -38,6 +38,8 @@ export function toRunSummary(r: Run): RunSummary {
     status: r.status ?? null,
     message: r.message ?? null,
     durationMs: r.durationMs ?? null,
+    costUsd: r.costUsd ?? null,
+    usage: r.usage ?? null,
     error: r.error ?? null,
     sample: r.sample ?? null,
     state: (r.state as RunSummary["state"]) ?? null,
@@ -82,6 +84,7 @@ export function toJobSummary(loop: Loop): JobSummary {
     completionReason: loop.completionReason ?? null,
     runs,
     runCount: store.countRuns(loop.id),
+    totalCostUsd: store.sumRunCost(loop.id),
   };
 }
 

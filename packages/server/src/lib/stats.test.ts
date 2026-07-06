@@ -10,6 +10,8 @@ const run = (ts: string, state: RunSummary['state']): RunSummary => ({
   status: 'nothing-new',
   message: null,
   durationMs: null,
+  costUsd: null,
+  usage: null,
   error: null,
   sample: null,
   state,

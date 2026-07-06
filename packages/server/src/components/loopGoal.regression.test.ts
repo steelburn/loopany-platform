@@ -52,7 +52,7 @@ describe('LoopDetailView closed/completed states', () => {
     expect(detail).toContain('completionReason')
   })
 
-  it('disables Run once while the loop is completed (until reopened)', () => {
-    expect(detail).toMatch(/disabled=\{busy \|\| !online \|\| completed\}/)
+  it('disables Run once while the loop is completed (until reopened) or already running', () => {
+    expect(detail).toMatch(/disabled=\{busy \|\| !online \|\| completed \|\| s\.running\}/)
   })
 })

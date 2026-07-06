@@ -134,6 +134,13 @@
       "when": 1783063044906,
       "tag": "0018_modern_leech",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1783315339448,
+      "tag": "0019_watery_black_widow",
+      "breakpoints": true
     }
   ]
 }

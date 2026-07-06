@@ -17,7 +17,7 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { buildWorkflowFallbackTask, dateStamp, foldEscalation, makeStreamConsumer, runDelivery, type Delivery } from "./runner.js";
+import { buildWorkflowFallbackTask, costFromResult, dateStamp, foldEscalation, makeStreamConsumer, runDelivery, type Delivery } from "./runner.js";
 
 describe("dateStamp", () => {
   test("formats YYYY-MM-DD (UTC)", () => {
@@ -130,6 +130,44 @@ describe("makeStreamConsumer", () => {
     c.feed('{"type":"result","is_error":false,"result":"ok","session_id":"sess-2"}\n');
     expect(c.result().json?.result).toBe("ok");
     expect(c.result().sessionId).toBe("sess-2"); // idempotent
+  });
+
+  test("the terminal result event's cost/usage fields survive into the final json", () => {
+    const c = makeStreamConsumer(() => {});
+    c.feed(
+      '{"type":"result","is_error":false,"result":"done","session_id":"s","total_cost_usd":0.4235,"num_turns":12,"usage":{"input_tokens":120,"output_tokens":950,"cache_read_input_tokens":48000,"cache_creation_input_tokens":900}}\n',
+    );
+    const cost = costFromResult(c.result().json!);
+    expect(cost).toEqual({
+      usd: 0.4235,
+      inputTokens: 120,
+      outputTokens: 950,
+      cacheReadTokens: 48000,
+      cacheCreationTokens: 900,
+      numTurns: 12,
+    });
+  });
+});
+
+describe("costFromResult", () => {
+  test("returns undefined when the result event carried no cost fields (older claude)", () => {
+    expect(costFromResult({ is_error: false, result: "ok" })).toBeUndefined();
+  });
+
+  test("drops non-numeric / negative values instead of forwarding garbage", () => {
+    const cost = costFromResult({
+      total_cost_usd: -1,
+      num_turns: 3,
+      usage: { input_tokens: "lots" as unknown as number, output_tokens: 10 },
+    });
+    expect(cost).toEqual({
+      usd: undefined,
+      inputTokens: undefined,
+      outputTokens: 10,
+      cacheReadTokens: undefined,
+      cacheCreationTokens: undefined,
+      numTurns: 3,
+    });
   });
 });
 

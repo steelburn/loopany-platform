@@ -17,7 +17,7 @@ import { Cron } from "croner";
 
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
-import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, Run, RunArtifact, RunRole, RunStatus, StateField, TranscriptStep } from "../db/schema.js";
+import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, Run, RunArtifact, RunRole, RunStatus, RunUsage, StateField, TranscriptStep } from "../db/schema.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
 import { completionMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
@@ -120,6 +120,35 @@ function coerceArtifacts(raw: unknown): RunArtifact[] | undefined {
     }
   }
   return out.length ? out : undefined;
+}
+
+/** Sanity ceilings on the daemon-reported cost figures (untrusted wire input) —
+ *  a single run costing more than this is a lie or a parser bug, not a bill. */
+const COST_USD_MAX = 10_000;
+const COST_TOKENS_MAX = 1e12;
+
+/** Validate the daemon-reported cost/usage (untrusted wire input): finite
+ *  non-negative numbers only, capped. Returns the run-row patch fields. */
+function coerceCost(raw: unknown): { costUsd?: number; usage?: RunUsage } {
+  if (!raw || typeof raw !== "object") return {};
+  const c = raw as Record<string, unknown>;
+  const num = (v: unknown, max: number): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max ? v : undefined;
+  const usage: RunUsage = {};
+  const tok = (k: keyof RunUsage, v: unknown) => {
+    const n = num(v, COST_TOKENS_MAX);
+    if (n !== undefined) usage[k] = n;
+  };
+  tok("inputTokens", c.inputTokens);
+  tok("outputTokens", c.outputTokens);
+  tok("cacheReadTokens", c.cacheReadTokens);
+  tok("cacheCreationTokens", c.cacheCreationTokens);
+  tok("numTurns", c.numTurns);
+  const costUsd = num(c.usd, COST_USD_MAX);
+  return {
+    ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(Object.keys(usage).length ? { usage } : {}),
+  };
 }
 
 /** Validate the daemon-reported execution trace (untrusted wire input; re-clip defensively). */
@@ -650,6 +679,8 @@ export class MachineGateway {
         outcome: r.outcome ?? null,
         status: r.status ?? null,
         durationMs: r.durationMs ?? null,
+        /** Claude-reported spend (USD estimate) so `loopany log` surfaces run cost. */
+        costUsd: r.costUsd ?? null,
         error: r.error ?? null,
         message: r.message ?? null,
         // The claude-code session id lets the agent jump from this survey straight
@@ -872,6 +903,8 @@ export class MachineGateway {
       message?: string;
       /** Workflow cursor (free-form) → persisted as loop.state for next run's `prev`. */
       cursor?: unknown;
+      /** Claude-reported cost/usage for this run (usd + token counts). */
+      cost?: unknown;
     },
   ): HttpResult {
     const slot = resolveRunToken(runToken);
@@ -909,6 +942,8 @@ export class MachineGateway {
         ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
         ...(enrichArtifacts ? { artifacts: enrichArtifacts } : {}),
         ...(enrichTranscript ? { transcript: enrichTranscript } : {}),
+        // Cost, like durationMs, is only known post-run — enrich the finished row.
+        ...coerceCost(body.cost),
       });
       if (typeof body.taskFileContent === "string") {
         store.updateLoop(slot.loopId, {
@@ -971,6 +1006,7 @@ export class MachineGateway {
       sessionId: typeof body.sessionId === "string" ? body.sessionId.slice(0, SESSION_ID_CAP) : null,
       ...(artifacts ? { artifacts } : {}),
       ...(transcript ? { transcript } : {}),
+      ...coerceCost(body.cost),
       ...(runState ? { state: runState } : {}),
       ...(message !== undefined ? { message } : {}),
       ...(ok ? {} : { error: typeof body.error === "string" ? body.error.slice(0, MESSAGE_CAP) : "run failed on machine" }),

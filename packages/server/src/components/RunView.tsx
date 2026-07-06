@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import type { ArtifactSummary, JobDetail, RunDiffResult, RunSummary, TranscriptResult } from '../types'
-import { dur, fmt } from '../lib/format'
+import { dur, fmt, fnum, money } from '../lib/format'
 import { loopDir } from '../lib/editPrompt'
 import { cancelRun, getArtifacts, getJobDetail, getRunDiff, getTranscript, loadOlderRuns } from '../server/loopApi'
 import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
@@ -335,6 +335,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               <span className="text-wire">·</span>
               {roleChip && <Pill>{roleChip}</Pill>}
               {run.durationMs != null && <Pill tone="ink">{dur(run.durationMs)}</Pill>}
+              {run.costUsd != null && <Pill tone="ink">{money(run.costUsd)}</Pill>}
               <code className="font-mono text-disabled">{run.id}</code>
             </div>
           </div>
@@ -404,6 +405,16 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               </Field>
               {run.status && <Field k="Status">{run.status}</Field>}
               {run.durationMs != null && <Field k="Duration">{dur(run.durationMs)}</Field>}
+              {run.costUsd != null && (
+                <Field k="Cost">
+                  {money(run.costUsd)}
+                  {run.usage && (run.usage.inputTokens != null || run.usage.outputTokens != null) && (
+                    <span className="ml-1.5 text-disabled">
+                      ({fnum((run.usage.inputTokens ?? 0) + (run.usage.cacheReadTokens ?? 0) + (run.usage.cacheCreationTokens ?? 0))} in · {fnum(run.usage.outputTokens ?? 0)} out)
+                    </span>
+                  )}
+                </Field>
+              )}
               {run.sample != null && <Field k="Sample">{String(run.sample)}</Field>}
               {run.state != null && (
                 <Field k="Run state">
