@@ -60,8 +60,10 @@ computes pure functions. Run instructions: `README.md`.
   the work / surface only what changed, end with exactly ONE `loopany report`/`finish`,
   `{{stateLine}}` report grammar, one pass then stop + per-run trigger + a pointer to
   the installable loopany skill for the deep protocol). `buildLoopSystemPrompt` returns
-  `""` so the daemon's `--append-system-prompt-file` is a harmless no-op on every
-  daemon (ships server-first, no daemon change). A closed loop's goal is prompt-injected
+  `""`; on an OLD daemon `--append-system-prompt-file` then points at an empty file (a
+  harmless no-op, so batches 1-2 shipped server-first with no daemon change), and the
+  current daemon skips the flag entirely when the delivered `systemPrompt` is empty (the
+  batch-5 `runner.ts` note under "Daemon gotchas"). A closed loop's goal is prompt-injected
   as `Goal (finish line): <goal>` (an own-line fill, `{{goalLine}}`). The old standing
   system prompt `skill/run/exec-loop.md` is retained as the source for the later
   skill-side `references/run.md` batch but is no longer imported or delivered.
