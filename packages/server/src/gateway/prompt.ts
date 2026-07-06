@@ -124,6 +124,10 @@ export function buildEvolveTask(loop: Loop, runs: Run[]): string {
     sample: r.sample,
     state: r.state,
     message: r.message,
+    // What the run cost (claude's own USD estimate) — evolve-relevant evidence:
+    // a consistently expensive loop is a signal to lift deterministic work into
+    // the workflow or sharpen the Spec so runs stop wandering.
+    costUsd: r.costUsd ?? null,
     session: r.sessionId ?? null,
   }));
   return [

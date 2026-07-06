@@ -10,8 +10,8 @@
  */
 import { expect, test } from "vitest";
 
-import { buildEditPrompt, buildEvolvePrompt, buildExecTask, buildLoopSystemPrompt } from "./prompt.js";
-import type { Loop } from "../db/schema.js";
+import { buildEditPrompt, buildEvolvePrompt, buildEvolveTask, buildExecTask, buildLoopSystemPrompt } from "./prompt.js";
+import type { Loop, Run } from "../db/schema.js";
 
 const loop = (over: Partial<Loop> = {}): Loop =>
   ({
@@ -41,6 +41,26 @@ test("evolve run prompt keeps every lever + smoke-test discipline", () => {
   expect(p).toMatch(/smoke-test/i);
   // No unfilled placeholders leak into the evolve prompt (it takes no vars).
   expect(p).not.toMatch(/\{\{(?!latest\.)\w+\}\}/);
+});
+
+test("evolve task payload inlines each run's cost, and the prose explains the field", () => {
+  const runs = [
+    {
+      ts: "2026-07-06T05:40:02.851Z",
+      outcome: "exec",
+      status: "new",
+      sample: null,
+      state: { checks: 3 },
+      message: "3 checks done",
+      costUsd: 0.8273,
+      sessionId: "sess-1",
+    },
+  ] as unknown as Run[];
+  const t = buildEvolveTask(loop(), runs);
+  // The recent-runs survey the evolve agent reads carries the per-run cost…
+  expect(t).toContain('"costUsd": 0.8273');
+  // …and the standing evolve instructions (skill/references/evolve.md) name it.
+  expect(buildEvolvePrompt()).toContain("costUsd");
 });
 
 test("evolve run prompt carries the task-first + workflow + dashboard guidance", () => {
