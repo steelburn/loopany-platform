@@ -12,6 +12,7 @@
  * then POSTs to the gateway's existing /api/machine/loop. The server stays the
  * sole validator; we pre-check the obvious local mistakes for a clear message.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import type { CliResponse, LegacyFallback } from "./cli-client.js";
@@ -54,6 +55,39 @@ export function cronLooksValid(cron: unknown): cron is string {
   if (s.startsWith("@")) return true; // @daily/@hourly/… — let the server judge
   const fields = s.split(/\s+/).length;
   return fields === 5 || fields === 6;
+}
+
+/**
+ * Deterministic JSON: object keys sorted recursively so two logically-identical
+ * configs (any key order) serialize identically. Arrays keep their order (order is
+ * meaningful — e.g. a stateSchema's fields). The idempotency key hashes this.
+ */
+export function canonicalJson(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  const obj = v as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
+}
+
+/** The machine id the server derives from a device token (BYOA §2: `m-sha256(tok)[:16]`).
+ *  Replicated here — a FROZEN wire contract — so the idempotency key binds this
+ *  machine exactly the way the server's `machineIdFromToken` does. */
+function machineIdFromToken(token: string): string {
+  return `m-${createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
+}
+
+/**
+ * The `new` idempotency key (F8, design §8.1): `sha256(machineId + canonicalJSON(config))`.
+ * A timed-out retry of the SAME `loopany new` sends the SAME key, so the server
+ * returns the existing loop instead of a twin; two genuinely-different configs get
+ * different keys (an intentional twin survives). The config hashed is the user's
+ * INTENT (the parsed `--json` object) — not the CLI envelope (timezone/agent/claim),
+ * which is derived, not intent. Additive on the wire: an old server ignores the key,
+ * a new server treats an absent key as no-dedupe, so both directions stay compatible.
+ */
+export function idempotencyKey(token: string, config: Record<string, unknown>): string {
+  return createHash("sha256").update(`${machineIdFromToken(token)}\n${canonicalJson(config)}`).digest("hex");
 }
 
 /** The coding agents Loopany can record a loop against (TS-only; cheap to widen). */
@@ -174,7 +208,11 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   if (agent) body.agent = agent;
   else delete body.agent;
   if (connectKey) body.claim = connectKey;
+  // Idempotency (F8): stamp a content-hash key on real creates so a timed-out retry
+  // replays the existing loop instead of making a twin. A dry-run creates nothing, so
+  // it carries no key. Hashed over the user's intent (`config`), stable across retries.
   if (dryRun) body.dryRun = true;
+  else body.idempotencyKey = idempotencyKey(token, config);
 
   try {
     // The whole config travels as the unified `new --json <config>` verb; the legacy
@@ -244,6 +282,9 @@ interface CreateResponse {
   ui?: boolean;
   /** Set when a provided dashboard was dropped — surfaced loudly so it's never silent. */
   warning?: string;
+  /** True when the server replayed an existing loop for a repeated idempotency key
+   *  (F8) instead of creating a new one — a timed-out retry returns the same loop. */
+  idempotent?: boolean;
 }
 
 /** Render the `--dry-run` create preview: the normalized config, detected tz, the

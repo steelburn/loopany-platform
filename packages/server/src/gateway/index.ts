@@ -38,6 +38,8 @@ import {
   pruneExpiredLeases,
   fulfillClaim,
   readClaim,
+  readNewIdempotency,
+  recordNewIdempotency,
   sha256,
   type ClaimResult,
   type RunLease,
@@ -498,6 +500,10 @@ export class MachineGateway {
       /** Validate-only (`loopany new --dry-run`): run every check, persist NOTHING,
        *  and return the normalized config + fire preview. Zero-exec preserved. */
       dryRun?: unknown;
+      /** Content-hash idempotency key the daemon derives (sha256 over machine id +
+       *  canonical config, §8.1). A retry with a still-live key returns the loop it
+       *  first created instead of a twin (F8). Absent ⇒ no dedupe (old daemon). */
+      idempotencyKey?: unknown;
     },
   ): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
@@ -591,6 +597,31 @@ export class MachineGateway {
       };
     }
 
+    // Idempotency (F8): a timed-out `loopany new` retry must never make a twin. The
+    // daemon sends a stable content key; if we already created a loop for this key on
+    // THIS machine within the window, return that loop (an idempotent REPLAY, §4.5)
+    // rather than a second one. Checked AFTER validation (so only a real, valid
+    // create is deduped) and AFTER the dry-run branch (a preview never dedupes).
+    const idempotencyKey = str(body.idempotencyKey);
+    if (idempotencyKey) {
+      const existingId = readNewIdempotency(idempotencyKey, machineId);
+      const existing = existingId ? store.getLoop(existingId) : undefined;
+      // Recheck existence + ownership: a since-deleted loop (or a stale record) falls
+      // through to a fresh create rather than replaying a loop that is gone.
+      if (existing && existing.machineId === machineId) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            id: existing.id,
+            name: existing.name ?? existing.id,
+            idempotent: true,
+            text: renderReplayText(existing.name ?? existing.id, existing.id, existing.goal),
+          },
+        };
+      }
+    }
+
     // Resolve the loop's TEAM. The connect-key/claim was minted under a specific
     // team's dashboard session; that bound team — not the machine's single home
     // team — decides where the loop lands. This is what lets ONE machine/daemon
@@ -648,6 +679,8 @@ export class MachineGateway {
     if (typeof body.claim === "string" && body.claim.trim()) {
       fulfillClaim(body.claim.trim(), { loopId: loop.id, name, machineId, agent });
     }
+    // Remember this create against its content key so an immediate retry replays it.
+    if (idempotencyKey) recordNewIdempotency(idempotencyKey, machineId, loop.id);
     if (uiDropped) log.warn({ machineId, loopId: loop.id }, "createLoop: provided ui dropped — loop created without a dashboard");
     log.info({ machineId, loopId: loop.id, agent, ui: ui != null }, "createLoop: created from a coding agent");
     // Echo `ui` presence (like dry-run) + a warning when a provided dashboard was
@@ -667,24 +700,52 @@ export class MachineGateway {
 
   // ---- GET/PATCH /api/machine/loop — the owner's interactive agent edits ----
 
-  /** List the loops bound to this machine, for `loopany loops`. */
-  listLoops(deviceToken: string): HttpResult {
+  /** List the loops bound to this machine, for `loopany loops`. The default columns
+   *  are the minimal `{id,name,cron,enabled,nextFire}` (P2); `--fields` extends them
+   *  from the optional set, and an unknown field fails loud (P6, VALIDATION_ERROR). */
+  listLoops(deviceToken: string, fieldsFlag?: string): HttpResult {
     const machineId = machineIdFromToken(deviceToken);
     if (!store.getMachine(machineId)) return { status: 401, body: { error: "unknown machine (token not registered)" } };
-    const loops = store.loopsForMachine(machineId).map((l) => ({
-      id: l.id,
-      name: l.name ?? l.id,
-      cron: l.cron,
-      timezone: l.timezone,
-      enabled: l.enabled,
-      notify: l.notify,
-      nextRunAt: l.nextRunAt,
-      // Folder hints so a workdir-scoped CLI (`loopany log`) can map the current
-      // directory back to a loop the same way the watcher resolves it.
-      workdir: l.workdir ?? null,
-      taskFile: l.taskFile ?? null,
-    }));
-    return { status: 200, body: { ok: true, loops, text: renderLoopsText(loops) } };
+
+    // --fields extends the default columns with any of the optional set; an unknown
+    // field fails loud (exit 1) listing what IS available (matches gh-axi's shape).
+    const extras: string[] = [];
+    if (fieldsFlag !== undefined) {
+      const requested = String(fieldsFlag).split(",").map((s) => s.trim()).filter(Boolean);
+      const unknown = requested.filter((f) => !LIST_OPTIONAL_FIELDS.includes(f));
+      if (unknown.length) {
+        return { status: 400, body: { error: `unknown field(s): ${unknown.join(", ")} — available: ${LIST_OPTIONAL_FIELDS.join(", ")}` } };
+      }
+      // Preserve request order, dedup, and never re-list a default column.
+      for (const f of requested) if (!extras.includes(f) && !LIST_DEFAULT_FIELDS.includes(f)) extras.push(f);
+    }
+    const fields = [...LIST_DEFAULT_FIELDS, ...extras];
+
+    const loops: LoopListRecord[] = store.loopsForMachine(machineId).map((l) => {
+      // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
+      // paused loop shows no next fire (— in the cell), matching §4.2.
+      const nextFire = l.enabled ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null;
+      const last = store.listRuns(l.id, 1)[0];
+      return {
+        id: l.id,
+        name: l.name ?? l.id,
+        cron: l.cron,
+        timezone: l.timezone,
+        enabled: l.enabled,
+        notify: l.notify,
+        model: l.model ?? null,
+        goal: l.goal ?? null,
+        taskFile: l.taskFile ?? null,
+        nextRunAt: l.nextRunAt,
+        // Folder hint so a workdir-scoped CLI (`loopany log`) can map the current
+        // directory back to a loop the same way the watcher resolves it.
+        workdir: l.workdir ?? null,
+        nextFire,
+        runs: store.countRuns(l.id),
+        lastOutcome: last ? runOutcomeToken(last) : null,
+      };
+    });
+    return { status: 200, body: { ok: true, loops, text: renderLoopsText(loops, fields) } };
   }
 
   /**
@@ -827,6 +888,10 @@ export class MachineGateway {
           name: loop.name ?? loop.id,
           changes,
           rejections: allRejections,
+          // The preview request itself succeeds (HTTP 200 + the rich changes/rejections
+          // tables), but a rejected key means the proposed patch is invalid — signal
+          // that to the CLI as exit 1 (§4.4), not the misleading exit 0 of a clean run.
+          exitCode: allRejections.length ? 1 : 0,
           text: renderEditDryRunText(loop.id, loop.name ?? loop.id, changes, allRejections),
         },
       };
@@ -835,7 +900,22 @@ export class MachineGateway {
     // Real path: a validation rejection fails loudly (first one, preserving the
     // per-field message + order the checks run in).
     if (rejections.length) return { status: 400, body: { error: rejections[0]!.reason } };
-    if (Object.keys(update).length === 0) return { status: 400, body: { error: "nothing to change" } };
+    // An empty patch (`edit --json '{}'`) is a VALID no-op (feedback #3), not an
+    // error: report `nothing to change` with the allowed-key list rather than a bare
+    // usage 400. (`show` existing is the real cure; this makes the seam legible.)
+    if (Object.keys(update).length === 0) {
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          id: loop.id,
+          name: loop.name ?? loop.id,
+          applied: [],
+          nothingToChange: true,
+          text: renderEditNoopText(loop.id, loop.name ?? loop.id),
+        },
+      };
+    }
 
     const updated = store.updateLoop(id, update);
     if (!updated) return { status: 404, body: { error: "loop not found" } };
@@ -1027,7 +1107,7 @@ export class MachineGateway {
         return this.createLoop(deviceToken, config);
       }
       case "loops":
-        return this.listLoops(deviceToken);
+        return this.listLoops(deviceToken, typeof flags["fields"] === "string" ? (flags["fields"] as string) : undefined);
       case "edit": {
         const parsed = parseJsonFlag(flags["json"]);
         if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
@@ -2261,9 +2341,58 @@ function finalizeCli(res: HttpResult): HttpResult {
   return res;
 }
 
-/** `loopany loops` — the typed loop list (P2/P4/P5/P9). Batch-1 fields are today's
- *  columns (id/name/cron/enabled); Batch 3 enriches with nextFire/lastOutcome. */
-function renderLoopsText(loops: Array<{ id: string; name: string; cron: string; enabled: boolean }>): string {
+/** `loopany loops` default columns (P2 — minimal): identity + the two things an
+ *  agent scans for (schedule + when it next fires). */
+const LIST_DEFAULT_FIELDS: string[] = ["id", "name", "cron", "enabled", "nextFire"];
+/** The optional columns `--fields` may add (the "available" set an unknown field is
+ *  measured against, §4.2). `runs`/`lastOutcome` are derived per loop. */
+const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "goal", "taskFile", "runs", "lastOutcome"];
+
+/** A loop's row for `loopany loops`: every renderable cell precomputed once (so the
+ *  `--fields` selection is a pure column pick). The structured `loops` body carries
+ *  the whole record (superset — an old daemon reads the fields it knows). */
+interface LoopListRecord {
+  id: string;
+  name: string;
+  cron: string;
+  timezone: string | null;
+  enabled: boolean;
+  notify: string;
+  model: string | null;
+  goal: string | null;
+  taskFile: string | null;
+  nextRunAt: string | null;
+  workdir: string | null;
+  /** Derived: the next cron fire in the loop's tz (ISO), or null when paused. */
+  nextFire: string | null;
+  /** Derived: total run count. */
+  runs: number;
+  /** Derived: the most recent run's outcome token, or null (no runs yet). */
+  lastOutcome: string | null;
+}
+
+/** One `loops` cell for a named column (scalar-rendered by `listBlock`). */
+function loopCell(rec: LoopListRecord, field: string): Scalar {
+  switch (field) {
+    case "id": return rec.id;
+    case "name": return rec.name;
+    case "cron": return rec.cron;
+    case "enabled": return rec.enabled ? "on" : "paused";
+    case "nextFire": return rec.nextFire ? fmtTime(rec.nextFire) : null;
+    case "timezone": return rec.timezone;
+    case "notify": return rec.notify;
+    case "model": return rec.model;
+    case "goal": return rec.goal;
+    case "taskFile": return rec.taskFile;
+    case "runs": return rec.runs;
+    case "lastOutcome": return rec.lastOutcome;
+    default: return null;
+  }
+}
+
+/** `loopany loops` — the typed loop list (P2/P4/P5/P9). Columns = the default set
+ *  plus any `--fields` extras (validated + resolved by `listLoops`). */
+function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
   if (!loops.length) {
     return doc(
       countLine(0),
@@ -2278,8 +2407,8 @@ function renderLoopsText(loops: Array<{ id: string; name: string; cron: string; 
     countLine(loops.length),
     listBlock(
       "loops",
-      ["id", "name", "cron", "enabled"],
-      loops.map((l) => [l.id, l.name, l.cron, l.enabled ? "on" : "paused"]),
+      fields,
+      loops.map((l) => fields.map((f) => loopCell(l, f))),
     ),
     helpBlock(["Run `loopany show <id>` to see a loop's full config", "Run `loopany log <id>` to see a loop's recent runs"]),
   );
@@ -2381,6 +2510,17 @@ function renderCreatedText(
   );
 }
 
+/** `loopany new` idempotent REPLAY (§4.5, F8) — the existing loop returned, never a
+ *  twin. Terser than a fresh create (no dashboard/nextRuns lines): the loop already
+ *  exists, so the agent just needs to know which one and how to inspect it. */
+function renderReplayText(name: string, loopId: string, goal: string | null): string {
+  return doc(
+    `created: ${scalar(name)} (${loopId}) [idempotent replay — existing loop returned]`,
+    `classification: ${goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
+    helpBlock([`Run \`loopany show ${loopId}\` to see the full config`]),
+  );
+}
+
 /** `loopany new --dry-run` — the normalized config + fire preview (no persistence). */
 function renderCreateDryRunText(
   config: { name: string | null; cron: string; timezone: string | null; taskFile: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
@@ -2411,6 +2551,17 @@ function renderEditAppliedText(loopId: string, name: string, applied: string[]):
     `updated: ${scalar(name)} (${loopId})`,
     inlineArray("applied", applied),
     helpBlock([`Run \`loopany show ${loopId}\` to confirm the new config`]),
+  );
+}
+
+/** `loopany edit --json '{}'` — the empty-patch no-op (feedback #3). Reports plainly
+ *  that nothing changed and lists the keys an edit MAY touch, so the agent's next
+ *  attempt is well-formed without having to fail to discover the envelope. */
+function renderEditNoopText(loopId: string, name: string): string {
+  return doc(
+    `nothing to change: ${scalar(name)} (${loopId})`,
+    inlineArray("editable", [...EDITABLE_LOOP_FIELDS]),
+    helpBlock([`Run \`loopany show ${loopId}\` to see the current config`]),
   );
 }
 

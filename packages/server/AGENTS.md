@@ -87,3 +87,35 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   dry-run preview shows zero changes; (2) `runAt`/`workflow`/`ui`/`stateSchema` accept
   `null` as an explicit clear (symmetric with `goal:null`), which is what `show --json`
   re-feeds for an unset field — a no-op when already null.
+
+## axi-conformance CLI (batch 3 — list/create aggregates, edit no-op, `new` idempotency)
+
+- **`loops` `--fields`**: default columns are the minimal `{id,name,cron,enabled,nextFire}`
+  (`LIST_DEFAULT_FIELDS`); `--fields` EXTENDS them from the optional set
+  `LIST_OPTIONAL_FIELDS` = `{timezone,notify,model,goal,taskFile,runs,lastOutcome}`
+  (request order, deduped, never re-listing a default). An unknown field — including
+  a DEFAULT column requested as an extra — fails loud: 400 `VALIDATION_ERROR`,
+  `unknown field(s): … — available: <optional set>`, exit 1. `listLoops(deviceToken,
+  fieldsFlag?)` computes per-loop `nextFire` (derived cron fire in the loop's tz, `—`
+  when paused), `runs` (`countRuns`), and `lastOutcome` (`runOutcomeToken` of the
+  newest run). The structured `loops` body carries the WHOLE `LoopListRecord`
+  (superset — an old daemon reads the fields it knows); `renderLoopsText(records,
+  fields)` picks columns via `loopCell`.
+- **`new` idempotency (F8, OQ3)**: the daemon (`create.ts`) computes
+  `idempotencyKey = sha256(machineId + canonicalJson(config))` — `machineId` derived
+  from the device token by the SAME frozen `m-sha256(tok)[:16]` scheme, `config` = the
+  user's parsed `--json` intent (NOT the CLI envelope) — and sends it on REAL creates
+  only (a dry-run creates nothing). Server keeps an in-memory `newIdempotency` map
+  (`tokens.ts`, 15-min TTL `NEW_IDEMPOTENCY_TTL_MS`, pruned on write like
+  `claimIntents`); `readNewIdempotency(key, machineId)` also rechecks the record's
+  machineId (a cross-machine key never replays another machine's loop) and
+  `createLoop` rechecks the loop still exists + belongs to the machine before
+  replaying. A live-key hit returns the existing loop with `idempotent:true` + the
+  §4.5 replay TOON (`renderReplayText`), never a twin; an absent key ⇒ no dedupe (old
+  daemons keep working). The check sits AFTER validation and the dry-run branch, and
+  the create is recorded only on success. Additive body field: old servers ignore it.
+- **`edit --json '{}'`** is now a VALID no-op (feedback #3): status 200, exit 0,
+  `nothing to change:` + the editable-key list (`renderEditNoopText`), not the old
+  bare-usage 400. **`edit --dry-run`** with a rejection now signals **exit 1** via an
+  explicit `body.exitCode` (HTTP stays 200 with the rich changes/rejections tables —
+  `finalizeCli` leaves a pre-set `exitCode` alone).

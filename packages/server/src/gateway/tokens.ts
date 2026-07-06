@@ -206,6 +206,57 @@ export function pruneExpiredLeases(now: number = Date.now()): void {
   }
 }
 
+// ---- `new` idempotency (content-hash → the loop it created) ----
+// `new` is the LONE non-idempotent mutation: every other write overwrites-to-value,
+// but a create with no dedupe makes a fresh loop every call, so a timed-out
+// `loopany new` retry silently makes a twin (F8). The daemon derives a stable
+// content key (sha256 over the machine id + the canonical config) and sends it; we
+// remember which loop that key created for a short window, so a retry with the SAME
+// key returns the existing loop instead of a second one. In-memory + TTL-pruned,
+// matching the claim-intent/lease posture (a server restart inside the window is an
+// accepted gap — the same tradeoff the lease/claim maps already accept). An absent
+// key ⇒ no dedupe, so an old daemon (which sends none) keeps the pre-batch-3 behavior.
+
+export interface NewIdempotencyRecord {
+  loopId: string;
+  /** The machine the key created the loop on — the read guard rechecks it so a
+   *  (hypothetical) cross-machine key can never replay another machine's loop. */
+  machineId: string;
+  /** Record time (ms) — drives the TTL prune so the map stays bounded. */
+  at: number;
+}
+
+const newIdempotency = new Map<string, NewIdempotencyRecord>();
+/** Long enough to swallow a timed-out retry (§8.1 owner decision OQ3), short enough
+ *  that two genuinely-different creates of the same config later don't collapse. */
+export const NEW_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000;
+
+function pruneNewIdempotency(now: number): void {
+  for (const [key, rec] of newIdempotency) {
+    if (now - rec.at > NEW_IDEMPOTENCY_TTL_MS) newIdempotency.delete(key);
+  }
+}
+
+/** Remember that `key` (from THIS machine) created `loopId`. Pruned on write. */
+export function recordNewIdempotency(key: string, machineId: string, loopId: string, now: number = Date.now()): void {
+  pruneNewIdempotency(now);
+  newIdempotency.set(key, { loopId, machineId, at: now });
+}
+
+/** The loop a still-live key already created for THIS machine, or undefined (a miss,
+ *  an expired key — dropped here — or a cross-machine record). NON-evicting on a hit:
+ *  a genuine retry may arrive more than once within the window. */
+export function readNewIdempotency(key: string, machineId: string, now: number = Date.now()): string | undefined {
+  const rec = newIdempotency.get(key);
+  if (!rec) return undefined;
+  if (now - rec.at > NEW_IDEMPOTENCY_TTL_MS) {
+    newIdempotency.delete(key);
+    return undefined;
+  }
+  if (rec.machineId !== machineId) return undefined;
+  return rec.loopId;
+}
+
 // ---- claim tokens (New-loop correlation) ----
 // The web mints a claim token and waits on it; Claude Code passes it as `claim`
 // when it POSTs the loop, so the web learns which loop was created without

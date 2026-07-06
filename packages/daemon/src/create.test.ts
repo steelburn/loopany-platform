@@ -14,7 +14,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { coerceAgent, cronLooksValid, detectAgentFromEnv, resolveAgent, runCreate } from "./create.js";
+import { canonicalJson, coerceAgent, cronLooksValid, detectAgentFromEnv, idempotencyKey, resolveAgent, runCreate } from "./create.js";
 import type { InstallOpts, InstallOutcome } from "./skill-install.js";
 
 const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
@@ -326,5 +326,85 @@ describe("runCreate — skill install fires only after a confirmed create, never
     });
     expect(code).toBe(2);
     expect(called).toBe(false);
+  });
+});
+
+describe("idempotencyKey / canonicalJson (F8 — `new` retry-safety, design §8.1)", () => {
+  test("canonicalJson sorts object keys recursively, preserves array order", () => {
+    expect(canonicalJson({ b: 1, a: 2 })).toBe(canonicalJson({ a: 2, b: 1 }));
+    expect(canonicalJson({ a: 2, b: 1 })).toBe('{"a":2,"b":1}');
+    // Nested objects also canonicalize; arrays keep order (order is meaningful).
+    expect(canonicalJson({ x: { d: 4, c: 3 }, y: [1, 2] })).toBe('{"x":{"c":3,"d":4},"y":[1,2]}');
+    expect(canonicalJson([3, 1, 2])).toBe("[3,1,2]");
+  });
+
+  test("the key is STABLE across retries (same token + config, any key order)", () => {
+    const k1 = idempotencyKey("dk_test", { name: "Docs", cron: "0 6 * * 1", taskFile: "x" });
+    const k2 = idempotencyKey("dk_test", { taskFile: "x", cron: "0 6 * * 1", name: "Docs" });
+    expect(k1).toBe(k2);
+    expect(k1).toMatch(/^[0-9a-f]{64}$/); // a sha256 hex digest
+  });
+
+  test("the key DIFFERS across configs and across machines (tokens)", () => {
+    const base = { name: "Docs", cron: "0 6 * * 1", taskFile: "x" };
+    expect(idempotencyKey("dk_test", base)).not.toBe(idempotencyKey("dk_test", { ...base, cron: "0 7 * * 1" }));
+    // A different device token ⇒ a different machine id in the hash ⇒ a different key.
+    expect(idempotencyKey("dk_a", base)).not.toBe(idempotencyKey("dk_b", base));
+  });
+});
+
+describe("runCreate — sends the idempotency key on a real create, omits it on --dry-run", () => {
+  const prevToken = process.env.LOOPANY_TOKEN;
+  beforeEach(() => {
+    process.env.LOOPANY_TOKEN = "dk_test";
+  });
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.LOOPANY_TOKEN;
+    else process.env.LOOPANY_TOKEN = prevToken;
+  });
+
+  // NB: the daemon resolves its token from ~/.loopany/device-token first (env is the
+  // fallback), so the integration test can't pin the exact key to a fixed token — it
+  // asserts the CONTRACT (present, 64-hex, stable across retries, differs by config).
+  // The exact `sha256(machineId + canonicalJSON(config))` value is pinned by the pure
+  // idempotencyKey tests above.
+  const keyOf = (sent: any[]) => JSON.parse(sent[sent.length - 1].argv[2]).idempotencyKey as string | undefined;
+
+  test("a real create stamps a 64-hex `idempotencyKey`, stable across a retry of the same config", async () => {
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md" });
+    const sent: any[] = [];
+    const run = (json: string) =>
+      runCreate(["--json", json, "--server-url", "http://test"], {
+        fetchImpl: async (_url: any, init: any) => {
+          sent.push(JSON.parse((init as any).body as string));
+          return okResponse({ ok: true, id: "loop-1", name: "X" });
+        },
+        installer: async () => ({ ok: true, line: "" }),
+        stdout: () => {},
+      });
+    expect(await run(cfg)).toBe(0);
+    const first = keyOf(sent);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    expect(await run(cfg)).toBe(0); // a retry (same argv)
+    expect(keyOf(sent)).toBe(first); // stable across the retry
+    // A different config ⇒ a different key (an intentional twin isn't collapsed).
+    expect(await run(cfgJson({ cron: "0 6 * * *", taskFile: "loopany/x/README.md" }))).toBe(0);
+    expect(keyOf(sent)).not.toBe(first);
+  });
+
+  test("--dry-run carries NO idempotency key (a preview creates nothing to dedupe)", async () => {
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "loopany/x/README.md" });
+    let payload: any = null;
+    const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
+      fetchImpl: async (_url: any, init: any) => {
+        payload = JSON.parse(JSON.parse((init as any).body as string).argv[2]);
+        return okResponse({ ok: true, dryRun: true, config: { cron: "0 5 * * *" }, nextRuns: [] });
+      },
+      installer: async () => ({ ok: true, line: "" }),
+      stdout: () => {},
+    });
+    expect(code).toBe(0);
+    expect(payload.idempotencyKey).toBeUndefined();
+    expect(payload.dryRun).toBe(true);
   });
 });
