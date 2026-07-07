@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactSummary } from '../types'
 import { fmt, humanBytes } from '../lib/format'
+import { resolveArtifactLink } from '../lib/artifactLinks'
 import { buildFileEntries, isTaskEntry } from '../lib/fileEntries'
 import { getArtifacts } from '../server/loopApi'
 import { ArtifactBody, ViewerHead } from './artifactView'
@@ -165,8 +166,22 @@ export function LoopFilesPanel({
             </ul>
           </nav>
 
-          {/* content viewer */}
-          <div className="min-w-0 overflow-y-auto">
+          {/* content viewer — intercept clicks on artifact-internal links: a
+              relative href that resolves to a synced file opens IN the panel
+              (never a browser navigation to a dead app route); a relative href
+              that matches nothing is suppressed. External links pass through. */}
+          <div
+            className="min-w-0 overflow-y-auto"
+            onClick={(ev) => {
+              if (!active) return
+              const a = (ev.target as Element).closest?.('a')
+              if (!a || !ev.currentTarget.contains(a)) return
+              const link = resolveArtifactLink(a.getAttribute('href'), active.path, entries.map((e) => e.path))
+              if (link.kind === 'external') return
+              ev.preventDefault()
+              if (link.kind === 'open') setSelected(link.path)
+            }}
+          >
             {activeIsTask && active ? (
               <TaskEntryView path={active.path} content={taskFileContent} syncedAt={taskFileSyncedAt} />
             ) : active?.kind === 'artifact' ? (

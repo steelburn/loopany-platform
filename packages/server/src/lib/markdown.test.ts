@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import DOMPurify from 'dompurify'
 import { describe, expect, it } from 'vitest'
 import { renderMarkdown } from './markdown'
 
@@ -16,5 +17,23 @@ describe('renderMarkdown', () => {
     expect(html).not.toContain('<script')
     expect(html).not.toContain('onerror')
     expect(html.toLowerCase()).not.toContain('javascript:')
+  })
+
+  it('new-tabs external http(s) links, leaves relative artifact links untouched', () => {
+    const html = renderMarkdown('[ext](https://x.test/y) and [file](tickets/SUP-71.md)')
+    expect(html).toMatch(/<a[^>]*href="https:\/\/x\.test\/y"[^>]*/)
+    const ext = html.match(/<a[^>]*href="https:\/\/x\.test\/y"[^>]*>/)?.[0] ?? ''
+    expect(ext).toContain('target="_blank"')
+    expect(ext).toContain('rel="noopener noreferrer"')
+    const rel = html.match(/<a[^>]*href="tickets\/SUP-71\.md"[^>]*>/)?.[0] ?? ''
+    expect(rel).toBeTruthy()
+    expect(rel).not.toContain('target=') // relative links stay in-app (the Files panel intercepts)
+  })
+
+  it('the external-anchor hook does not leak into later sanitize calls', () => {
+    renderMarkdown('[ext](https://x.test/y)')
+    // a bare DOMPurify user after renderMarkdown must not inherit the hook
+    const out = DOMPurify.sanitize('<a href="https://x.test/z">z</a>')
+    expect(out).not.toContain('target="_blank"')
   })
 })
