@@ -8,6 +8,7 @@ import { mergeRuns } from '../lib/runs'
 import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { LoopFilesPanel } from './LoopFilesPanel'
+import { ArtifactPreviewProvider } from './ArtifactPreview'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { MachinesModal } from './MachinesModal'
 import { Timeline, WINDOW } from './Timeline'
@@ -581,6 +582,7 @@ export function LoopDetailView({ id }: { id: string }) {
 
   return (
     <Shell back={backLink}>
+      <ArtifactPreviewProvider loopId={id} running={running}>
       {/* header */}
       <header className="rounded-card border border-hairline bg-surface px-6 pb-5 pt-[22px] shadow-card">
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
@@ -768,6 +770,7 @@ export function LoopDetailView({ id }: { id: string }) {
       </div>
 
       <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} />
+      </ArtifactPreviewProvider>
     </Shell>
   )
 }

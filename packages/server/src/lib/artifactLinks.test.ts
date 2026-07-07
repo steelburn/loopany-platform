@@ -52,6 +52,26 @@ describe('resolveArtifactLink', () => {
     })
   })
 
+  it('re-anchors an over-climbing on-disk link onto the re-rooted synced tree', () => {
+    // sync re-roots: the loop folder is root, syncPaths folders sit at their
+    // prefix. A file written with `../../tickets/X` (on-disk relative, loop dir
+    // is levels deep) must still resolve to the synced `tickets/X`.
+    expect(resolveArtifactLink('../../tickets/SUP-71.md', 'SUP-71.md', PATHS)).toEqual({
+      kind: 'open',
+      path: 'tickets/SUP-71.md',
+    })
+    expect(resolveArtifactLink('../../signals/FB-1.md', 'reports/2026/jan.md', PATHS)).toEqual({
+      kind: 'open',
+      path: 'signals/FB-1.md',
+    })
+  })
+
+  it('re-anchors by a unique path-suffix, but stays dead when ambiguous', () => {
+    const paths = ['a/dup.md', 'b/dup.md', 'x/only.md']
+    expect(resolveArtifactLink('../only.md', 'q/r.md', paths)).toEqual({ kind: 'open', path: 'x/only.md' })
+    expect(resolveArtifactLink('../dup.md', 'q/r.md', paths)).toEqual({ kind: 'dead' }) // two matches → refuse
+  })
+
   it('is dead when the target is not synced (suppress, never 404)', () => {
     expect(resolveArtifactLink('tickets/NOPE.md', 'README.md', PATHS)).toEqual({ kind: 'dead' })
     expect(resolveArtifactLink('../../outside.md', 'README.md', PATHS)).toEqual({ kind: 'dead' })

@@ -4,6 +4,8 @@ import { fmt } from '../lib/format'
 import { isTaskPath } from '../lib/fileEntries'
 import { localDay, matchArtifacts, productDate, type ProductDate } from '../lib/productDate'
 import { ArtifactBody } from './artifactView'
+import { ArtifactLinks } from './artifactLinkContext'
+import { useArtifactPreview } from './ArtifactPreview'
 import { Modal, ModalHead } from './Modal'
 
 /**
@@ -133,6 +135,7 @@ export function LoopCalendar({
   const months = useMemo(() => [...new Set(products.map((p) => monthOf(p.date)))].sort(), [products])
   const [shown, setShown] = useState<string | null>(null)
   const [reviewing, setReviewing] = useState<Product | null>(null)
+  const { open: openPreview } = useArtifactPreview()
 
   // Repair the review pick when the product set changes (poll refresh): a
   // vanished artifact's modal closes instead of pointing at stale data.
@@ -282,7 +285,12 @@ export function LoopCalendar({
             }
           />
           <div className="mt-4 min-w-0">
-            <ArtifactBody loopId={loopId} file={reviewing.file} />
+            {/* internal links open the target inline (preview modal stacks on top) */}
+            <ArtifactLinks
+              value={{ current: reviewing.file.path, known: (artifacts ?? []).map((a) => a.path), onOpen: openPreview }}
+            >
+              <ArtifactBody loopId={loopId} file={reviewing.file} />
+            </ArtifactLinks>
           </div>
         </Modal>
       )}

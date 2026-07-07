@@ -4,6 +4,8 @@ import { isTaskPath } from '../lib/fileEntries'
 import { fmt } from '../lib/format'
 import { matchArtifacts, newestMatch } from '../lib/productDate'
 import { ArtifactBody, ViewerHead } from './artifactView'
+import { ArtifactLinks } from './artifactLinkContext'
+import { useArtifactPreview } from './ArtifactPreview'
 
 /**
  * `<loop-embed file="reports/digest-2026-07-01.md">` /
@@ -43,6 +45,7 @@ export function LoopEmbed({
   /** The loop's task-file path - excluded from `match` results (exact `file=` may still target it). */
   taskFile?: string
 }) {
+  const { open: openPreview } = useArtifactPreview()
   const requested = file ?? match
   const shell = 'min-w-0 overflow-hidden rounded-card border border-hairline bg-surface shadow-card'
 
@@ -99,7 +102,10 @@ export function LoopEmbed({
         }
       />
       <CollapsibleBody collapse={!full && !target.binary && !target.oversize}>
-        <ArtifactBody loopId={loopId} file={target} />
+        {/* internal links in the embedded file open the target inline (preview modal) */}
+        <ArtifactLinks value={{ current: target.path, known: artifacts.map((a) => a.path), onOpen: openPreview }}>
+          <ArtifactBody loopId={loopId} file={target} />
+        </ArtifactLinks>
       </CollapsibleBody>
     </div>
   )

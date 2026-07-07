@@ -4,6 +4,8 @@ import { isTaskPath } from '../lib/fileEntries'
 import { fmt } from '../lib/format'
 import { matchArtifacts, productDate, type ProductDate } from '../lib/productDate'
 import { ArtifactBody, isMarkdown } from './artifactView'
+import { ArtifactLinks } from './artifactLinkContext'
+import { useArtifactPreview } from './ArtifactPreview'
 import { Modal, ModalHead } from './Modal'
 
 /**
@@ -71,6 +73,7 @@ export function LoopKanban({
   taskFile?: string
 }) {
   const [reviewing, setReviewing] = useState<Card | null>(null)
+  const { open: openPreview } = useArtifactPreview()
   const cols = [
     ...new Set(
       (columns ?? '')
@@ -165,7 +168,12 @@ export function LoopKanban({
             }
           />
           <div className="mt-4 min-w-0">
-            <ArtifactBody loopId={loopId} file={reviewing.file} />
+            {/* internal links open the target inline (preview modal stacks on top) */}
+            <ArtifactLinks
+              value={{ current: reviewing.file.path, known: (artifacts ?? []).map((a) => a.path), onOpen: openPreview }}
+            >
+              <ArtifactBody loopId={loopId} file={reviewing.file} />
+            </ArtifactLinks>
           </div>
         </Modal>
       )}

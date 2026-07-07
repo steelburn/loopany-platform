@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactSummary } from '../types'
 import { fmt, humanBytes } from '../lib/format'
-import { resolveArtifactLink } from '../lib/artifactLinks'
 import { buildFileEntries, isTaskEntry } from '../lib/fileEntries'
+import { ArtifactLinks } from './artifactLinkContext'
+import { useArtifactPreview } from './ArtifactPreview'
 import { getArtifacts } from '../server/loopApi'
 import { ArtifactBody, ViewerHead } from './artifactView'
 import { TaskFileView } from './TaskFileView'
@@ -43,6 +44,7 @@ export function LoopFilesPanel({
   const [artifacts, setArtifacts] = useState<ArtifactSummary[] | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const seq = useRef(0) // guards a stale list overwriting a fresh one
+  const { open: openPreview } = useArtifactPreview()
 
   const refresh = useCallback(async () => {
     const mine = ++seq.current
@@ -82,6 +84,7 @@ export function LoopFilesPanel({
   }, [entries, selected])
 
   const active = entries.find((e) => e.path === selected) ?? null
+  const knownPaths = useMemo(() => entries.map((e) => e.path), [entries])
   // The task row — synthetic OR a synced artifact badged as the task — always
   // renders from the loop record's `taskFileContent` (authoritative + always
   // present), not the artifact's own blob fetch. Same file, but this is robust to
@@ -166,27 +169,19 @@ export function LoopFilesPanel({
             </ul>
           </nav>
 
-          {/* content viewer — intercept clicks on artifact-internal links: a
-              relative href that resolves to a synced file opens IN the panel
-              (never a browser navigation to a dead app route); a relative href
-              that matches nothing is suppressed. External links pass through. */}
-          <div
-            className="min-w-0 overflow-y-auto"
-            onClick={(ev) => {
-              if (!active) return
-              const a = (ev.target as Element).closest?.('a')
-              if (!a || !ev.currentTarget.contains(a)) return
-              const link = resolveArtifactLink(a.getAttribute('href'), active.path, entries.map((e) => e.path))
-              if (link.kind === 'external') return
-              ev.preventDefault()
-              if (link.kind === 'open') setSelected(link.path)
-            }}
-          >
-            {activeIsTask && active ? (
-              <TaskEntryView path={active.path} content={taskFileContent} syncedAt={taskFileSyncedAt} />
-            ) : active?.kind === 'artifact' ? (
-              <ArtifactEntryView loopId={loopId} file={active.file} />
-            ) : null}
+          {/* content viewer. The provider lets the rendered markdown (TaskFileView)
+              intercept artifact-internal links: a relative href resolving to a
+              synced file opens it inline in the shared preview modal (never a
+              browser nav to a dead app route); an unresolvable one is suppressed.
+              External links pass through. */}
+          <div className="min-w-0 overflow-y-auto">
+            <ArtifactLinks value={active ? { current: active.path, known: knownPaths, onOpen: openPreview } : null}>
+              {activeIsTask && active ? (
+                <TaskEntryView path={active.path} content={taskFileContent} syncedAt={taskFileSyncedAt} />
+              ) : active?.kind === 'artifact' ? (
+                <ArtifactEntryView loopId={loopId} file={active.file} />
+              ) : null}
+            </ArtifactLinks>
           </div>
         </div>
       )}

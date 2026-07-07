@@ -32,6 +32,13 @@ function normalizeSegments(path: string): string | null {
   return out.join('/')
 }
 
+/** Drop leading `./` and `../` segments, keeping the meaningful tail. */
+function stripLeadingUp(path: string): string {
+  const segs = path.split('/').filter((s) => s && s !== '.')
+  while (segs.length && segs[0] === '..') segs.shift()
+  return segs.join('/')
+}
+
 export function resolveArtifactLink(
   rawHref: string | null | undefined,
   currentPath: string,
@@ -64,6 +71,20 @@ export function resolveArtifactLink(
       ]
   for (const c of candidates) {
     if (c && known.has(c)) return { kind: 'open', path: c }
+  }
+
+  // Re-anchor an over-climbing link. Artifacts reference each other by ON-DISK
+  // relative paths (`../../tickets/SUP-71.md` — the loop folder sits levels deep
+  // in the repo), but sync RE-ROOTS the tree: the loop folder becomes root and a
+  // syncPaths folder sits at its prefix (`tickets/…`). So the `..` hops overshoot
+  // the synced root. Recover the intent by the meaningful tail: drop leading
+  // `../` and match the remainder against a synced path (exact, then a UNIQUE
+  // path-suffix so an ambiguous tail stays dead rather than opening the wrong file).
+  const tail = stripLeadingUp(pathPart)
+  if (tail) {
+    if (known.has(tail)) return { kind: 'open', path: tail }
+    const suffixed = [...known].filter((k) => k.endsWith('/' + tail))
+    if (suffixed.length === 1) return { kind: 'open', path: suffixed[0]! }
   }
   return { kind: 'dead' }
 }
