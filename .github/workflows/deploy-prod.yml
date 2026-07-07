@@ -1,19 +1,18 @@
 # Deploy Loopany to PRODUCTION — app "loopany-prod", https://loopany.ai.
 #
-# Manual / gated ON PURPOSE: the single-scheduler invariant makes an accidental
+# Manual ONLY ON PURPOSE: the single-scheduler invariant makes an accidental
 # double-target dangerous, so prod is NOT auto-deployed on push to main (that's
-# staging's job, deploy.yml → loopany-testing). Trigger this from the Actions tab
-# (workflow_dispatch) or by pushing a `v*` tag.
+# staging's job, deploy.yml → loopany-testing) NOR on a `v*` tag (that tag is
+# publish-daemon.yml's npm-publish trigger — sharing it would deploy prod on every
+# daemon release). Trigger this from the Actions tab (workflow_dispatch) only.
 #
-# Migrations apply on container boot: scripts/prestart.mjs runs `drizzle-kit
-# migrate` over the DIRECT Supabase URL (DIRECT_DATABASE_URL) whenever
+# Migrations apply on container boot: scripts/prestart.mjs runs the postgres-js
+# migrator over the DIRECT Supabase URL (DIRECT_DATABASE_URL) whenever
 # DATABASE_URL is set, so a bad migration fails the deploy before it serves.
 name: Deploy Prod (Fly)
 
 on:
   workflow_dispatch: {}
-  push:
-    tags: ['v*']
 
 # Distinct group from staging's `fly-deploy` so neither cancels the other's
 # in-flight deploy. Never cancel a prod deploy mid-flight.

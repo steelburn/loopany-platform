@@ -312,6 +312,39 @@ test("report syncs the machine's task file content onto the loop", async () => {
   expect(stored?.taskFileSyncedAt).toBeTruthy();
 });
 
+test("report strips NUL (U+0000) from wire text so the Postgres write can't throw", async () => {
+  // Postgres text/jsonb columns REJECT U+0000 (SQLite tolerated it). A daemon-supplied
+  // transcript/message/taskFileContent/cursor carrying a NUL must persist with the byte
+  // removed rather than throwing mid-finalize (which the sweep later mis-reads as a timeout).
+  const { loop, machine, run } = (await seededLoop());
+  const token = tokens.registerRunLease({
+    runId: run.id,
+    loopId: loop.id,
+    machineId: machine.id,
+    role: "exec",
+    allowControl: false,
+  });
+  const res = (await gateway().report(token, {
+    ok: true,
+    durationMs: 1000,
+    sessionId: "sess\u0000abc",
+    message: "done\u0000ok",
+    taskFileContent: "# Log\u0000\n2026-06-19: ok\n",
+    transcript: [{ kind: "text", text: "step\u0000one" }],
+    cursor: { note: "cur\u0000sor", count: 3 },
+  }));
+  expect(res.status).toBe(200);
+
+  const storedRun = (await store.getRun(run.id));
+  expect(storedRun?.message).toBe("doneok");
+  expect(storedRun?.sessionId).toBe("sessabc");
+  expect(storedRun?.transcript).toEqual([{ kind: "text", text: "stepone" }]);
+
+  const storedLoop = (await store.getLoop(loop.id));
+  expect(storedLoop?.taskFileContent).toBe("# Log\n2026-06-19: ok\n");
+  expect(storedLoop?.state).toEqual({ note: "cursor", count: 3 });
+});
+
 test("a machine's bound loops gate its deletion (loopsForMachine drains to empty)", async () => {
   const { machine, loop } = (await seededLoop());
   // While a loop is bound, the delete guard sees it and must block.

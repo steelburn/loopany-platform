@@ -49,14 +49,25 @@ async function boot(): Promise<Booted> {
 
   await scheduler.start(abort.signal);
 
-  const sweep = setInterval(() => gateway.sweep(), ONLINE_TTL_MS);
+  // sweep() is async now: a rejected promise off a bare timer callback is an
+  // unhandled rejection (Node can terminate). Catch it so a transient sweep error
+  // just logs and the interval keeps ticking.
+  const sweep = setInterval(
+    () => void gateway.sweep().catch((err) => logger.error({ err: String(err) }, "sweep tick failed")),
+    ONLINE_TTL_MS,
+  );
   sweep.unref?.();
   abort.signal.addEventListener("abort", () => clearInterval(sweep), { once: true });
 
   // Storage maintenance (prune snapshots → GC unreferenced blob bytes) on its own
   // slower cadence — keeps R2 from growing monotonically. Async + best-effort, so a
-  // slow R2 delete can't block the loop; void the promise (the method never throws).
-  const gc = setInterval(() => void gateway.maintainStorage(), gcIntervalMs());
+  // slow R2 delete can't block the loop; catch the promise (same unhandled-rejection
+  // guard as sweep — the method is not supposed to throw, but a timer must never let
+  // one escape).
+  const gc = setInterval(
+    () => void gateway.maintainStorage().catch((err) => logger.error({ err: String(err) }, "gc tick failed")),
+    gcIntervalMs(),
+  );
   gc.unref?.();
   abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
 

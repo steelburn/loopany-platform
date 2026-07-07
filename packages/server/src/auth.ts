@@ -165,7 +165,7 @@ export function loopInScope(loopTeamId: string | null, scope: RequestScope): boo
 export const auth = betterAuth({
   baseURL: process.env.LOOPANY_BASE_URL || "http://127.0.0.1:3000",
   secret: authSecret || "dev-insecure-secret-change-in-prod",
-  database: drizzleAdapter(db, { provider: "sqlite" }),
+  database: drizzleAdapter(db, { provider: "pg" }),
   socialProviders: authEnabled
     ? { github: { clientId: clientId!, clientSecret: clientSecret! } }
     : {},

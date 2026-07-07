@@ -137,7 +137,7 @@ function coerceArtifacts(raw: unknown): RunArtifact[] | undefined {
     const p = (a as { path?: unknown })?.path;
     const k = (a as { kind?: unknown })?.kind;
     if (typeof p === "string" && p.trim() && (k === "created" || k === "edited")) {
-      out.push({ path: p.slice(0, 1024), kind: k });
+      out.push({ path: clipText(p, 1024), kind: k });
       if (out.length >= MAX_ARTIFACTS) break;
     }
   }
@@ -184,9 +184,9 @@ function coerceTranscript(raw: unknown): TranscriptStep[] | undefined {
     const text = (s as { text?: unknown })?.text;
     const name = (s as { name?: unknown })?.name;
     const input = (s as { input?: unknown })?.input;
-    if (typeof text === "string") step.text = text.slice(0, STEP_FIELD_MAX);
-    if (typeof name === "string") step.name = name.slice(0, 200);
-    if (typeof input === "string") step.input = input.slice(0, STEP_FIELD_MAX);
+    if (typeof text === "string") step.text = clipText(text, STEP_FIELD_MAX);
+    if (typeof name === "string") step.name = clipText(name, 200);
+    if (typeof input === "string") step.input = clipText(input, STEP_FIELD_MAX);
     out.push(step);
     if (out.length >= MAX_TRANSCRIPT_STEPS) break;
   }
@@ -374,7 +374,7 @@ export class MachineGateway {
     // actually differs, so the hot path (every ~3s/machine) isn't a 2nd UPDATE.
     if (info) {
       // Untrusted wire input: a version is a short semver, so clip defensively.
-      const version = typeof info.version === "string" ? info.version.slice(0, 64) : undefined;
+      const version = typeof info.version === "string" ? clipText(info.version, 64) : undefined;
       const patch = {
         ...(info.host && info.host !== machine.hostname ? { hostname: info.host } : {}),
         ...(info.platform && info.platform !== machine.platform ? { platform: info.platform } : {}),
@@ -395,7 +395,7 @@ export class MachineGateway {
         const run = await store.getRun(p.runId);
         if (run?.machineId !== machineId || run.phase !== "running") continue;
         const step = Number(p.step) || 0;
-        const label = p.label.slice(0, 200);
+        const label = clipText(p.label, 200);
         // Skip the write when the signal hasn't moved — claude can sit inside one
         // long tool_use across several 3s heartbeats, so most polls repeat it. The
         // freshness stamp (`at`, the sweep's inactivity signal) still refreshes,
@@ -1042,7 +1042,7 @@ export class MachineGateway {
       if (p.workflow === null) set("workflow", null, loop.workflow);
       else if (typeof p.workflow !== "string") rejections.push({ key: "workflow", reason: "workflow must be a string (the pre-stage JS)" });
       else {
-        const v = this.validateWorkflow(p.workflow.slice(0, WIRE_TEXT_CAP));
+        const v = this.validateWorkflow(clipText(p.workflow, WIRE_TEXT_CAP));
         if (!v.ok) rejections.push({ key: "workflow", reason: v.detail });
         else set("workflow", v.value, loop.workflow);
       }
@@ -1050,7 +1050,7 @@ export class MachineGateway {
     if (p.ui !== undefined) {
       if (p.ui === null) set("ui", null, loop.ui);
       else if (typeof p.ui !== "string") rejections.push({ key: "ui", reason: "ui must be a string (the dashboard HTML)" });
-      else set("ui", this.validateUi(p.ui.slice(0, WIRE_TEXT_CAP)).value, loop.ui);
+      else set("ui", this.validateUi(clipText(p.ui, WIRE_TEXT_CAP)).value, loop.ui);
     }
     if (p.stateSchema !== undefined) {
       if (p.stateSchema === null) set("stateSchema", null, loop.stateSchema);
@@ -1294,7 +1294,7 @@ export class MachineGateway {
       const enrichTranscript = coerceTranscript(body.transcript);
       await store.updateRun(lease.runId, {
         ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
-        ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
+        ...(typeof body.sessionId === "string" ? { sessionId: clipText(body.sessionId, SESSION_ID_CAP) } : {}),
         ...(enrichArtifacts ? { artifacts: enrichArtifacts } : {}),
         ...(enrichTranscript ? { transcript: enrichTranscript } : {}),
         // Cost, like durationMs, is only known post-run — enrich the finished row.
@@ -1302,7 +1302,7 @@ export class MachineGateway {
       });
       if (typeof body.taskFileContent === "string") {
         await store.updateLoop(lease.loopId, {
-          taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
+          taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
           taskFileSyncedAt: nowIso(),
         });
       }
@@ -1323,7 +1323,7 @@ export class MachineGateway {
       const artifacts = coerceArtifacts(body.artifacts);
       const transcript = coerceTranscript(body.transcript);
       const rawMessage = body.message !== undefined ? body.message : body.finalText;
-      const message = typeof rawMessage === "string" ? rawMessage.slice(0, MESSAGE_CAP) : undefined;
+      const message = typeof rawMessage === "string" ? clipText(rawMessage, MESSAGE_CAP) : undefined;
       const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
       // Only a SUCCESSFUL reconcile carries the workflow cursor forward — same as
       // the normal path, a failed run must never advance loop.state (the next run's
@@ -1335,11 +1335,14 @@ export class MachineGateway {
         if ((serialized?.length ?? 0) > CURSOR_CAP) {
           log.warn({ runId: lease.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
           cursor = undefined;
+        } else {
+          // Postgres jsonb rejects NUL — strip it from the free-form cursor's strings.
+          cursor = stripNulDeep(cursor);
         }
       }
       if (typeof body.taskFileContent === "string") {
         await store.updateLoop(lease.loopId, {
-          taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
+          taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
           taskFileSyncedAt: nowIso(),
         });
       }
@@ -1351,7 +1354,7 @@ export class MachineGateway {
         phase: ok ? "done" : "error",
         outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
         ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
-        ...(typeof body.sessionId === "string" ? { sessionId: body.sessionId.slice(0, SESSION_ID_CAP) } : {}),
+        ...(typeof body.sessionId === "string" ? { sessionId: clipText(body.sessionId, SESSION_ID_CAP) } : {}),
         ...(artifacts ? { artifacts } : {}),
         ...(transcript ? { transcript } : {}),
         ...(runState ? { state: runState } : {}),
@@ -1360,7 +1363,7 @@ export class MachineGateway {
         // it with the real error (honest record), keeping the run an error.
         ...(ok
           ? { error: null }
-          : { error: typeof body.error === "string" ? body.error.slice(0, MESSAGE_CAP) : run.error }),
+          : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : run.error }),
         progress: null,
         ts: nowIso(),
       });
@@ -1401,6 +1404,9 @@ export class MachineGateway {
       if ((serialized?.length ?? 0) > CURSOR_CAP) {
         log.warn({ runId: lease.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
         cursor = undefined;
+      } else {
+        // Postgres jsonb rejects NUL — strip it from the free-form cursor's strings.
+        cursor = stripNulDeep(cursor);
       }
     }
     if (cursor !== undefined) await store.updateLoop(lease.loopId, { state: cursor });
@@ -1409,7 +1415,7 @@ export class MachineGateway {
     // defensively even though the daemon already caps it).
     if (typeof body.taskFileContent === "string") {
       await store.updateLoop(lease.loopId, {
-        taskFileContent: body.taskFileContent.slice(0, WIRE_TEXT_CAP),
+        taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
         taskFileSyncedAt: nowIso(),
       });
     }
@@ -1419,7 +1425,7 @@ export class MachineGateway {
     // Clipped to the same cap the agent-api report verb enforces.
     const rawMessage =
       body.message !== undefined ? body.message : !run?.message && body.finalText ? body.finalText : undefined;
-    const message = typeof rawMessage === "string" ? rawMessage.slice(0, MESSAGE_CAP) : rawMessage;
+    const message = typeof rawMessage === "string" ? clipText(rawMessage, MESSAGE_CAP) : rawMessage;
 
     const artifacts = coerceArtifacts(body.artifacts);
     const transcript = coerceTranscript(body.transcript);
@@ -1439,13 +1445,13 @@ export class MachineGateway {
       outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
       durationMs: body.durationMs ?? null,
       // Untrusted wire input — clip like every other free-text field.
-      sessionId: typeof body.sessionId === "string" ? body.sessionId.slice(0, SESSION_ID_CAP) : null,
+      sessionId: typeof body.sessionId === "string" ? clipText(body.sessionId, SESSION_ID_CAP) : null,
       ...(artifacts ? { artifacts } : {}),
       ...(transcript ? { transcript } : {}),
       ...coerceCost(body.cost),
       ...(runState ? { state: runState } : {}),
       ...(message !== undefined ? { message } : {}),
-      ...(ok ? {} : { error: typeof body.error === "string" ? body.error.slice(0, MESSAGE_CAP) : "run failed on machine" }),
+      ...(ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
       progress: null, // live signal done — the full transcript supersedes it
       ts: nowIso(),
     });
@@ -1802,7 +1808,7 @@ export class MachineGateway {
     if (!best) return;
     const bytes = await bytesFor(pathHashes.get(best)!);
     if (!bytes || looksBinary(bytes)) return;
-    const text = bytes.toString("utf8").slice(0, WIRE_TEXT_CAP);
+    const text = clipText(bytes.toString("utf8"), WIRE_TEXT_CAP);
     if (text === loop.taskFileContent) return; // unchanged → no row churn per flush
     await store.updateLoop(loop.id, { taskFileContent: text, taskFileSyncedAt: nowIso() });
   }
@@ -3237,9 +3243,42 @@ function isStatus(s: string | undefined): s is RunStatus {
   return s === "new" || s === "resolved" || s === "nothing-new";
 }
 
-/** Trim a value to a non-empty string, or null. Shared by createLoop/editLoop. */
+/** Strip NUL (U+0000) from a wire string: Postgres text/jsonb columns REJECT the
+ *  NUL byte (SQLite tolerated it), so a daemon-supplied string carrying one would
+ *  throw mid-finalize on the DB write. The single sanitizing primitive shared by
+ *  `str`, `clipText`, and `stripNulDeep`. */
+function stripNul(s: string): string {
+  return s.replace(/\u0000/g, "");
+}
+
+/** Clip a free-text wire field to its byte-budget cap AND strip NUL — the shared
+ *  chokepoint for every capped daemon string (message / transcript / taskFileContent
+ *  / sessionId / error / …). Caps are unchanged; NUL is removed so the DB write can't
+ *  throw. */
+function clipText(s: string, cap: number): string {
+  return stripNul(s.slice(0, cap));
+}
+
+/** Recursively strip NUL from a free-form JSON value's string keys + values — for the
+ *  workflow cursor, which is stored whole into the `loop.state` jsonb column (same
+ *  Postgres U+0000 constraint). Structure-preserving; non-strings pass through. */
+function stripNulDeep(v: unknown): unknown {
+  if (typeof v === "string") return stripNul(v);
+  if (Array.isArray(v)) return v.map(stripNulDeep);
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[stripNul(k)] = stripNulDeep(val);
+    return out;
+  }
+  return v;
+}
+
+/** Trim a value to a non-empty string, or null (NUL stripped). Shared by
+ *  createLoop/editLoop. */
 function str(v: unknown): string | null {
-  return typeof v === "string" && v.trim() ? v.trim() : null;
+  if (typeof v !== "string") return null;
+  const t = stripNul(v).trim();
+  return t ? t : null;
 }
 
 /** Structural equality for an editLoop before→after comparison: null and undefined

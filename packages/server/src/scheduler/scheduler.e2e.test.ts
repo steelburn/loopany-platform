@@ -226,6 +226,34 @@ test("finishEdit / finishEvolution preserve a FUTURE nextRunAt (the run's own re
   s.removeLoop(loop.id); // stop the cron/timers finishEdit's addLoop armed
 });
 
+test("in-flight guard: two concurrent triggers for one loop create exactly ONE pending run", async () => {
+  const loop = await dueLoop("inflight");
+  // Hold the first tick in dispatch so the second trigger overlaps it in-flight.
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let dispatches = 0;
+  const s = new sched.Scheduler({
+    async dispatch(): Promise<void> {
+      dispatches++;
+      await gate;
+    },
+  });
+
+  // Drive runLoop directly (private): two calls in the SAME synchronous tick — the
+  // first adds the loop to the in-flight set before its first await, the second
+  // short-circuits on it (the guard the async hasOpenRun→addRun window needs).
+  const r = s as unknown as { runLoop(id: string): Promise<void> };
+  const first = r.runLoop(loop.id);
+  const second = r.runLoop(loop.id);
+  await second; // the guarded (skipped) call resolves immediately
+  release();
+  await first;
+
+  expect(dispatches).toBe(1);
+  expect((await store.listRuns(loop.id)).length).toBe(1);
+  expect((await store.openRuns()).length).toBe(1);
+});
+
 test("evolveDue tick creates a dedicated evolve run", async () => {
   const machine = await store.createMachine({ id: "m-evolve-tick", userId: "u1", name: "M", tokenHash: "h", online: true });
   const loop = await store.createLoop({
