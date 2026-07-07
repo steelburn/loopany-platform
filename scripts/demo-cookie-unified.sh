@@ -68,7 +68,7 @@ read -r -d '' TASK <<'EOF' || true
 并在结尾附一句温暖的早安寄语。整体控制在 5 行以内，用中文，语气轻松温暖。
 EOF
 LOOP_ID="$(node -e '
-  process.stdout.write(JSON.stringify({name:"Cookie每日早餐报告",cron:"0 8 * * *",task:process.argv[1],notify:"always"}));
+  process.stdout.write(JSON.stringify({name:"Cookie每日早餐报告",cron:"0 8 * * *",taskFile:process.argv[1],notify:"always"}));
 ' "$TASK" | { read -r payload; machine_post /api/machine/loop "$payload"; } | node -e 'console.log(JSON.parse(require("fs").readFileSync(0)).id)')"
 echo "  loop: $LOOP_ID"
 
