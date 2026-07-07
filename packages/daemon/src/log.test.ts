@@ -136,6 +136,27 @@ describe("runLog", () => {
     expect(cap.stderr()).toContain("loop id");
   });
 
+  test("F5: an explicit nonexistent loop id → structured NOT_FOUND to STDOUT, exit 1 (not prose/exit 2)", async () => {
+    const { fetchFn } = stubFetch({
+      "/api/machine/loop": { body: { loops: [{ id: "loop-real", name: "Real", workdir: "/elsewhere", taskFile: null }] } },
+    });
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    const code = await runLog(["loop-zzzz-00000000"], cap);
+    expect(code).toBe(1); // an error, not a usage failure
+    // P6: `error:`/`code:` to STDOUT (never a prose `loopany:` line on stderr).
+    expect(cap.stdout()).toContain("code: NOT_FOUND");
+    expect(cap.stdout()).toContain('error: "no loop \\"loop-zzzz-00000000\\" on this machine');
+    expect(cap.stdout()).toContain("run `loopany loops`"); // actionable guidance kept
+    expect(cap.stderr()).toBe("");
+  });
+
+  test("an unknown flag on log → exit 2 (uniform with loops/edit), no server fetch for the log call", async () => {
+    const { fetchFn } = stubFetch({});
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["--bogus"], cap)).toBe(2);
+    expect(cap.stderr()).toContain("unknown flag --bogus");
+  });
+
   test("an explicit loop id is forwarded without needing a workdir match", async () => {
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
