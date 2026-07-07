@@ -12,16 +12,40 @@
  * `tsx src/cli.ts`). Writing the shim is BEST-EFFORT: any failure degrades to the
  * npx path and never fails `up`.
  *
- * Every external touch (write, mkdir, homedir, PATH) is an injectable seam so tests
- * never write into the real home dir.
+ * Because a durable on-PATH shim outlives the process that wrote it, it is hardened
+ * two ways so it can never be fragile or destructive (feedback #4 follow-up):
+ *   1. It ONLY lands from a DURABLE install — when the re-exec entry lives inside an
+ *      npx / npm cache (`/_npx/`, `/_cacache/`), the shim would re-exec a prunable
+ *      path, so we SKIP it and print one line of guidance (`npm i -g @crewlet/loopany`).
+ *   2. It NEVER clobbers a foreign `loopany` — before writing a candidate we read any
+ *      existing `loopany` there and skip it unless it is our OWN prior shim (starts
+ *      with the re-exec marker); a real `npm i -g` binary is left untouched. Refreshing
+ *      our own shim is idempotent.
+ *
+ * Every external touch (write, mkdir, read, homedir, PATH, entry) is an injectable
+ * seam so tests never write into the real home dir.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/** The re-exec wrapper prefix that uniquely marks a `loopany` file as OUR shim (vs a
+ *  real installed binary). Any existing `loopany` that doesn't start with this is
+ *  foreign and must never be overwritten. */
+export const SHIM_MARKER = "#!/bin/sh\nexec ";
+
 /** Single-quote a string for safe interpolation into the /bin/sh wrapper. */
 function shQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Is the re-exec entry inside an ephemeral npx / npm cache (`/_npx/`, `/_cacache/`)?
+ *  A shim that re-execs such a path breaks once the cache is pruned, so we refuse to
+ *  write a durable shim from one. Path-separator agnostic (handles Windows too). */
+export function isEphemeralEntry(entry: string): boolean {
+  if (!entry) return false;
+  const p = entry.replace(/\\/g, "/");
+  return p.includes("/_npx/") || p.includes("/_cacache/");
 }
 
 /** The re-exec wrapper body (same shape as `callback-bin.ts`'s callback shim). */
@@ -37,16 +61,23 @@ export function shimContents(
 export interface BinShimDeps {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
+  /** The re-exec entry (defaults to `process.argv[1]`) — checked for npx-cache staleness. */
+  entry?: () => string;
+  /** Read an existing `loopany` file's contents, or null when absent — used to refuse
+   *  overwriting a foreign binary. */
+  readShim?: (p: string) => string | null;
   /** Write the shim; throws (e.g. EACCES) → the caller falls back to ~/.local/bin. */
   writeShim?: (dir: string) => void;
   out?: (s: string) => void;
 }
 
 export interface BinShimResult {
-  /** Absolute path to the installed `loopany` shim, or null if none could be written. */
+  /** Absolute path to the installed `loopany` shim, or null if none was written. */
   path: string | null;
   /** Whether the shim's dir is on PATH (drives the one-line guidance). */
   onPath: boolean;
+  /** True only when a shim was actually written this call (false on any skip/failure). */
+  written: boolean;
 }
 
 /** The candidate bin dirs, most-preferred first: the npm GLOBAL bin (when running
@@ -73,32 +104,56 @@ function defaultWriteShim(dir: string): void {
   fs.writeFileSync(path.join(dir, "loopany"), shimContents(), { mode: 0o755 });
 }
 
+/** Default reader: existing `loopany` contents, or null when absent/unreadable. */
+function defaultReadShim(p: string): string | null {
+  try {
+    return fs.readFileSync(p, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Write (idempotently) the `loopany` shim to the best writable bin dir and, when that
- * dir is not on PATH, print one copy-pasteable line of guidance. Best-effort: returns
- * `{path:null,onPath:false}` (announced) if every candidate fails to write.
+ * dir is not on PATH, print one copy-pasteable line of guidance. Best-effort and
+ * hardened (see the file header): SKIPS entirely when the re-exec entry is an
+ * ephemeral npx/npm cache path, and never overwrites a foreign `loopany`. Returns
+ * `{path:null,onPath:false,written:false}` (announced) on any skip or total failure.
  */
 export function ensureBinShim(injected: BinShimDeps = {}): BinShimResult {
   const env = injected.env ?? process.env;
   const homedir = (injected.homedir ?? os.homedir)();
+  const entry = (injected.entry ?? (() => process.argv[1] ?? ""))();
+  const readShim = injected.readShim ?? defaultReadShim;
   const writeShim = injected.writeShim ?? defaultWriteShim;
   const out = injected.out ?? ((s: string) => void process.stdout.write(s));
 
+  // A shim re-execing an npx/npm cache path breaks once that cache is pruned; don't
+  // write a durable shim from an ephemeral install — point at a global install instead.
+  if (isEphemeralEntry(entry)) {
+    out("loopany: skipped the PATH shim (running from an npx cache); install globally for a stable bin: npm i -g @crewlet/loopany\n");
+    return { path: null, onPath: false, written: false };
+  }
+
   for (const dir of binDirCandidates(env, homedir)) {
+    const shimPath = path.join(dir, "loopany");
+    // Never clobber a foreign `loopany` (e.g. a real `npm i -g` binary); only refresh
+    // our OWN prior shim. A missing file (null) is free to write.
+    const existing = readShim(shimPath);
+    if (existing !== null && !existing.startsWith(SHIM_MARKER)) continue;
     try {
       writeShim(dir);
     } catch {
       continue; // e.g. EACCES on a root-owned global bin — try the next candidate.
     }
-    const shimPath = path.join(dir, "loopany");
     const onPath = dirOnPath(dir, env.PATH);
     if (!onPath) {
       out(`loopany: installed \`loopany\` to ${shimPath} — add it to your PATH: export PATH="${dir}:$PATH"\n`);
     }
-    return { path: shimPath, onPath };
+    return { path: shimPath, onPath, written: true };
   }
   out("loopany: could not write a `loopany` PATH shim (keep using `npx @crewlet/loopany`)\n");
-  return { path: null, onPath: false };
+  return { path: null, onPath: false, written: false };
 }
 
 /** The installed shim's path (for the home view's `bin:` line) WITHOUT writing it —

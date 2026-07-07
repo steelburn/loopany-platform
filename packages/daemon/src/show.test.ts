@@ -57,6 +57,14 @@ describe("runShow", () => {
     expect(calls[1]!.argv).toEqual(["show", "loop-here"]);
   });
 
+  test("--server-url <url> is consumed as a flag value, not the positional loop id", async () => {
+    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }], () => ({ ok: true, body: { ok: true, text: "loop:\n  id: loop-x", exitCode: 0 } }));
+    const cap = capture({ fetchFn });
+    // The URL must NOT be mistaken for the loop id; `loop-x` still resolves.
+    expect(await runShow(["--server-url", "https://srv.test", "loop-x"], cap.deps)).toBe(0);
+    expect(calls[1]!.argv).toEqual(["show", "loop-x"]);
+  });
+
   test("not connected → exit 2, no fetch", async () => {
     const { fetchFn, calls } = stub([], () => ({ ok: true, body: {} }));
     const cap = capture({ fetchFn, server: "", token: undefined });

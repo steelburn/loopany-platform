@@ -196,7 +196,12 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **PATH shim** (`bin-shim.ts`, feedback #4): `loopany up`/`update` write a `loopany`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance when the dir
-  isn't on PATH. `home` reports the shim as `bin:` via `existingBinShim`.
+  isn't on PATH. `home` reports the shim as `bin:` via `existingBinShim`. HARDENED so
+  the durable shim is never fragile/destructive: it lands ONLY from a durable install
+  (`isEphemeralEntry` skips an npx/npm-cache `/_npx/`,`/_cacache/` re-exec entry, with
+  `npm i -g` guidance) and NEVER clobbers a foreign `loopany` (only refreshes our own
+  shim, detected by the `SHIM_MARKER` prefix); `ensureBinShim` returns
+  `{path,onPath,written}` so callers/tests can assert skipped-vs-written.
 - **TEST HAZARD**: the `up`/`update` integration refreshers (`ensureBinShim`,
   `refreshHooks`) write the REAL `~/.claude/settings.json` + `~/.local/bin` if not
   injected. `ensure.test.ts`'s `seams()` MUST no-op both (it does); every setup/bin-shim

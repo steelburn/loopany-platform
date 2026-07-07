@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { binDirCandidates, dirOnPath, ensureBinShim, existingBinShim, shimContents } from "./bin-shim.js";
+import { binDirCandidates, dirOnPath, ensureBinShim, existingBinShim, isEphemeralEntry, shimContents } from "./bin-shim.js";
 
 describe("binDirCandidates", () => {
   test("prefers the npm global bin (npm_config_prefix) then ~/.local/bin", () => {
@@ -37,18 +37,31 @@ describe("shimContents", () => {
   });
 });
 
+describe("isEphemeralEntry", () => {
+  test("flags npx / npm cache paths, not durable installs", () => {
+    expect(isEphemeralEntry("/home/u/.npm/_npx/abc123/node_modules/@crewlet/loopany/dist/cli.js")).toBe(true);
+    expect(isEphemeralEntry("/home/u/.npm/_cacache/content-v2/x")).toBe(true);
+    expect(isEphemeralEntry("C:\\Users\\u\\AppData\\npm-cache\\_npx\\abc\\cli.js")).toBe(true);
+    expect(isEphemeralEntry("/usr/local/lib/node_modules/@crewlet/loopany/dist/cli.js")).toBe(false);
+    expect(isEphemeralEntry("/home/u/.local/bin/loopany")).toBe(false);
+    expect(isEphemeralEntry("")).toBe(false);
+  });
+});
+
 describe("ensureBinShim", () => {
-  test("writes to the first candidate and returns its path + onPath", () => {
+  test("writes to the first candidate and returns its path + onPath + written", () => {
     const wrote: string[] = [];
     const out: string[] = [];
     const r = ensureBinShim({
       env: { npm_config_prefix: "/opt/node", PATH: `/opt/node/bin${path.delimiter}/usr/bin` },
       homedir: () => "/home/u",
+      entry: () => "/opt/node/lib/node_modules/@crewlet/loopany/dist/cli.js",
+      readShim: () => null,
       writeShim: (dir) => void wrote.push(dir),
       out: (s) => out.push(s),
     });
     expect(wrote).toEqual([path.join("/opt/node", "bin")]);
-    expect(r).toEqual({ path: path.join("/opt/node", "bin", "loopany"), onPath: true });
+    expect(r).toEqual({ path: path.join("/opt/node", "bin", "loopany"), onPath: true, written: true });
     expect(out.join("")).toBe(""); // on PATH → no guidance
   });
 
@@ -58,6 +71,8 @@ describe("ensureBinShim", () => {
     const r = ensureBinShim({
       env: { npm_config_prefix: "/usr/local", PATH: "/usr/bin" },
       homedir: () => "/home/u",
+      entry: () => "/usr/local/lib/node_modules/@crewlet/loopany/dist/cli.js",
+      readShim: () => null,
       writeShim: (dir) => {
         if (dir === path.join("/usr/local", "bin")) throw new Error("EACCES");
         wrote.push(dir);
@@ -67,6 +82,7 @@ describe("ensureBinShim", () => {
     expect(wrote).toEqual([path.join("/home/u", ".local", "bin")]);
     expect(r.path).toBe(path.join("/home/u", ".local", "bin", "loopany"));
     expect(r.onPath).toBe(false);
+    expect(r.written).toBe(true);
     expect(out.join("")).toContain("add it to your PATH");
     expect(out.join("")).toContain(path.join("/home/u", ".local", "bin"));
   });
@@ -76,13 +92,64 @@ describe("ensureBinShim", () => {
     const r = ensureBinShim({
       env: {},
       homedir: () => "/home/u",
+      entry: () => "/usr/local/lib/node_modules/@crewlet/loopany/dist/cli.js",
+      readShim: () => null,
       writeShim: () => {
         throw new Error("EROFS");
       },
       out: (s) => out.push(s),
     });
-    expect(r).toEqual({ path: null, onPath: false });
+    expect(r).toEqual({ path: null, onPath: false, written: false });
     expect(out.join("")).toContain("could not write");
+  });
+
+  test("ephemeral (npx-cache) entry → skips writing, prints global-install guidance", () => {
+    const wrote: string[] = [];
+    const out: string[] = [];
+    const r = ensureBinShim({
+      env: { npm_config_prefix: "/opt/node", PATH: "/opt/node/bin" },
+      homedir: () => "/home/u",
+      entry: () => "/home/u/.npm/_npx/abc123/node_modules/@crewlet/loopany/dist/cli.js",
+      readShim: () => null,
+      writeShim: (dir) => void wrote.push(dir),
+      out: (s) => out.push(s),
+    });
+    expect(wrote).toEqual([]); // never wrote
+    expect(r).toEqual({ path: null, onPath: false, written: false });
+    expect(out.join("")).toContain("npx cache");
+    expect(out.join("")).toContain("npm i -g @crewlet/loopany");
+  });
+
+  test("refuses to overwrite a FOREIGN `loopany`, falling through to the next candidate", () => {
+    const wrote: string[] = [];
+    const out: string[] = [];
+    const globalBin = path.join("/opt/node", "bin", "loopany");
+    const r = ensureBinShim({
+      env: { npm_config_prefix: "/opt/node", PATH: `/opt/node/bin${path.delimiter}/home/u/.local/bin` },
+      homedir: () => "/home/u",
+      entry: () => "/opt/node/lib/node_modules/@crewlet/loopany/dist/cli.js",
+      // A real installed binary at the global bin — not our shim.
+      readShim: (p) => (p === globalBin ? "#!/usr/bin/env node\nconsole.log('real bin')" : null),
+      writeShim: (dir) => void wrote.push(dir),
+      out: (s) => out.push(s),
+    });
+    expect(wrote).toEqual([path.join("/home/u", ".local", "bin")]); // skipped the foreign one
+    expect(r.path).toBe(path.join("/home/u", ".local", "bin", "loopany"));
+    expect(r.written).toBe(true);
+  });
+
+  test("idempotently refreshes our OWN prior shim (marker match)", () => {
+    const wrote: string[] = [];
+    const globalBin = path.join("/opt/node", "bin", "loopany");
+    const r = ensureBinShim({
+      env: { npm_config_prefix: "/opt/node", PATH: "/opt/node/bin" },
+      homedir: () => "/home/u",
+      entry: () => "/opt/node/lib/node_modules/@crewlet/loopany/dist/cli.js",
+      readShim: (p) => (p === globalBin ? "#!/bin/sh\nexec '/usr/bin/node' '/old/cli.js' \"$@\"\n" : null),
+      writeShim: (dir) => void wrote.push(dir),
+    });
+    expect(wrote).toEqual([path.join("/opt/node", "bin")]); // overwrote our own shim
+    expect(r).toEqual({ path: globalBin, onPath: true, written: true });
   });
 });
 

@@ -25,15 +25,21 @@ export type ShowDeps = {
   token?: string;
 };
 
-/** `--k v` pairs, bare boolean `--flag` → true; everything else positional. */
+/** Bare boolean `--json`/`--full` → true; any other `--flag` (e.g. `--server-url
+ *  <url>`) is value-taking and CONSUMES its following token, so the value is never
+ *  mistaken for the positional loop id; everything else is positional. */
 function parseArgs(args: string[]): { positional: string[]; json: boolean; full: boolean } {
   const positional: string[] = [];
   let json = false;
   let full = false;
-  for (const a of args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
     if (a === "--json") json = true;
     else if (a === "--full") full = true;
-    else if (!a.startsWith("--")) positional.push(a);
+    else if (a.startsWith("--")) {
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith("--")) i++; // skip the flag's value
+    } else positional.push(a);
   }
   return { positional, json, full };
 }
