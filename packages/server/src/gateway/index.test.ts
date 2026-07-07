@@ -2011,9 +2011,9 @@ test("cli loops: text is a TOON list (count + typed header + help), structured l
   // Structured fields unchanged (byte-compatible with today's body).
   expect(body.ok).toBe(true);
   expect(body.loops.map((l) => l.id)).toContain(loop.id);
-  // TOON surface.
+  // TOON surface — default columns are the minimal id/name/cron/enabled/nextFire (P2).
   expect(body.text).toContain("count: 1");
-  expect(body.text).toContain("loops[1]{id,name,cron,enabled}:");
+  expect(body.text).toContain("loops[1]{id,name,cron,enabled,nextFire}:");
   expect(body.text).toContain(loop.id);
   expect(body.text).toContain("help[2]:");
   expect(body.exitCode).toBe(0);
@@ -2332,4 +2332,196 @@ test("cli errors render as error:/code: TOON to stdout with exitCode 1", () => {
   expect(denied.status).toBe(403);
   expect(textOf(denied)).toContain("code: FORBIDDEN");
   expect(textOf(denied)).toContain("run-only verb");
+});
+
+// ---- batch 3: list/create aggregates, edit no-op, error contract, `new` idempotency ----
+
+test("cli loops: count aggregate + nextFire on an enabled loop, — on a paused one", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  // An enabled loop that fires soon, and a paused one (no next fire).
+  const on = store.createLoop({ userId: "u1", machineId, name: "Docs Sweep", cron: "0 6 * * 1", enabled: true, notify: "auto" });
+  const off = store.createLoop({ userId: "u1", machineId, name: "Ship v1", cron: "0 9 * * *", enabled: false, notify: "auto" });
+  const text = textOf(gateway().cli(deviceToken, ["loops"]));
+  expect(text).toContain("count: 2");
+  expect(text).toContain("loops[2]{id,name,cron,enabled,nextFire}:");
+  // The enabled loop shows a computed fire time; the paused loop shows the em-dash.
+  const rows = text.split("\n");
+  const onRow = rows.find((r) => r.includes(on.id))!;
+  expect(onRow).toContain("on");
+  expect(onRow).toMatch(/"\d{4}-\d{2}-\d{2} \d{2}:\d{2}"/); // a quoted fire time
+  const offRow = rows.find((r) => r.includes(off.id))!;
+  expect(offRow).toContain("paused");
+  expect(offRow.trimEnd().endsWith("—")).toBe(true); // paused ⇒ nextFire is —
+});
+
+test("cli loops --fields: extends the default columns from the optional set (in request order)", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const loop = store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 6 * * 1", enabled: true, notify: "always", goal: "ship it" });
+  store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new" });
+  const text = textOf(gateway().cli(deviceToken, ["loops", "--fields", "notify,goal,runs,lastOutcome"]));
+  expect(text).toContain("loops[1]{id,name,cron,enabled,nextFire,notify,goal,runs,lastOutcome}:");
+  const row = text.split("\n").find((r) => r.includes(loop.id))!;
+  expect(row).toContain("always");
+  expect(row).toContain('"ship it"'); // goal (quoted, has a space)
+  expect(row).toContain("nothing-new"); // lastOutcome token
+  expect(row).toMatch(/,1,/); // runs count = 1
+});
+
+test("cli loops --fields lastOutcome: tracks the last EXEC run, never masked by a later evolve/edit", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  // A loop whose newest run is a SUCCESSFUL evolve but whose last scheduled exec FAILED.
+  const masked = store.createLoop({ userId: "u1", machineId, name: "Masked", cron: "0 6 * * 1", enabled: true, notify: "auto" });
+  store.addRun({ loopId: masked.id, userId: "u1", machineId, phase: "error", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "error", status: null });
+  store.addRun({ loopId: masked.id, userId: "u1", machineId, phase: "done", role: "evolve", ts: "2026-07-05T07:00:00Z", outcome: "evolve", status: null });
+  // A loop with only an exec run.
+  const execOnly = store.createLoop({ userId: "u1", machineId, name: "ExecOnly", cron: "0 6 * * 1", enabled: true, notify: "auto" });
+  store.addRun({ loopId: execOnly.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new" });
+  // A loop with no exec runs at all (only an edit).
+  const noExec = store.createLoop({ userId: "u1", machineId, name: "NoExec", cron: "0 6 * * 1", enabled: true, notify: "auto" });
+  store.addRun({ loopId: noExec.id, userId: "u1", machineId, phase: "done", role: "edit", ts: "2026-07-05T06:00:00Z", outcome: "exec", status: null });
+
+  const text = textOf(gateway().cli(deviceToken, ["loops", "--fields", "lastOutcome"]));
+  const rows = text.split("\n");
+  const maskedRow = rows.find((r) => r.includes(masked.id))!;
+  expect(maskedRow).toContain("failed"); // the failed exec, NOT the later successful evolve
+  expect(maskedRow).not.toContain("evolve");
+  const execRow = rows.find((r) => r.includes(execOnly.id))!;
+  expect(execRow).toContain("ok/nothing-new");
+  const noExecRow = rows.find((r) => r.includes(noExec.id))!;
+  expect(noExecRow.trimEnd().endsWith("—")).toBe(true); // no exec run ⇒ lastOutcome is —
+});
+
+test("cli loops --fields: an unknown field fails loud (VALIDATION_ERROR, exit 1, available set listed)", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 6 * * 1", enabled: true, notify: "auto" });
+  const res = gateway().cli(deviceToken, ["loops", "--fields", "notify,bogus"]);
+  expect(res.status).toBe(400);
+  const text = textOf(res);
+  expect(text).toContain("unknown field(s): bogus");
+  expect(text).toContain("available: timezone, notify, model, goal, taskFile, runs, lastOutcome");
+  expect(text).toContain("code: VALIDATION_ERROR");
+  expect((res.body as { exitCode: number }).exitCode).toBe(1);
+});
+
+test("cli loops --fields: a default column requested as an extra is rejected (only the optional set extends)", () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const res = gateway().cli(deviceToken, ["loops", "--fields", "name"]);
+  expect(res.status).toBe(400);
+  expect(textOf(res)).toContain("unknown field(s): name");
+});
+
+test("cli new: an idempotent replay with the same key returns the SAME loop (never a twin)", () => {
+  const { deviceToken, machineId } = seededCli();
+  const gw = gateway();
+  const cfg = JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "loopany/x/README.md", ui: "<div id='dash'>hi</div>", idempotencyKey: "key-abc" });
+  const before = store.loopsForMachine(machineId).length;
+  const first = gw.cli(deviceToken, ["new", "--json", cfg]);
+  expect(first.status).toBe(200);
+  const firstBody = first.body as { id: string; idempotent?: boolean; ui?: boolean };
+  expect(firstBody.idempotent).toBeUndefined(); // a genuine first create
+  expect(firstBody.ui).toBe(true); // a dashboard was applied on the real create
+  expect(store.loopsForMachine(machineId).length).toBe(before + 1);
+
+  // A retry with the SAME key returns the SAME loop — the §4.5 replay TOON, no twin.
+  const replay = gw.cli(deviceToken, ["new", "--json", cfg]);
+  expect(replay.status).toBe(200);
+  const replayBody = replay.body as { id: string; idempotent?: boolean; ui?: boolean; text: string };
+  expect(replayBody.id).toBe(firstBody.id);
+  expect(replayBody.idempotent).toBe(true);
+  // The replay echoes the EXISTING loop's dashboard state, so the daemon's
+  // `dashboard ui: applied` line stays factually accurate on a timed-out retry.
+  expect(replayBody.ui).toBe(true);
+  expect(replayBody.text).toContain("[idempotent replay — existing loop returned]");
+  expect(store.loopsForMachine(machineId).length).toBe(before + 1); // still exactly one
+});
+
+test("cli new: an idempotent replay of a no-dashboard loop echoes ui:false", () => {
+  const { deviceToken } = seededCli();
+  const gw = gateway();
+  const cfg = JSON.stringify({ name: "Plain", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "key-noui" });
+  const first = gw.cli(deviceToken, ["new", "--json", cfg]);
+  expect((first.body as { ui?: boolean }).ui).toBe(false);
+  const replay = gw.cli(deviceToken, ["new", "--json", cfg]);
+  const replayBody = replay.body as { idempotent?: boolean; ui?: boolean };
+  expect(replayBody.idempotent).toBe(true);
+  expect(replayBody.ui).toBe(false);
+});
+
+test("cli new: a different key (different config) does NOT collide — an intentional twin survives", () => {
+  const { deviceToken, machineId } = seededCli();
+  const gw = gateway();
+  const a = gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "A", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "k-a" })]);
+  const b = gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "B", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "k-b" })]);
+  expect((a.body as { id: string }).id).not.toBe((b.body as { id: string }).id);
+  expect((b.body as { idempotent?: boolean }).idempotent).toBeUndefined();
+});
+
+test("cli new: idempotency binds the machine — the same key from another machine is not a replay", () => {
+  const tokenA = tokens.mintDeviceToken();
+  const machineA = tokens.machineIdFromToken(tokenA);
+  store.createMachine({ id: machineA, userId: "u1", name: "A", tokenHash: tokens.sha256(tokenA), online: true });
+  const tokenB = tokens.mintDeviceToken();
+  const machineB = tokens.machineIdFromToken(tokenB);
+  store.createMachine({ id: machineB, userId: "u1", name: "B", tokenHash: tokens.sha256(tokenB), online: true });
+  const gw = gateway();
+  const cfg = JSON.stringify({ name: "Shared", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "shared-key" });
+  const a = gw.cli(tokenA, ["new", "--json", cfg]);
+  const b = gw.cli(tokenB, ["new", "--json", cfg]);
+  // Same content key, different machines ⇒ two distinct loops (no cross-machine replay).
+  expect((a.body as { id: string }).id).not.toBe((b.body as { id: string }).id);
+  expect((b.body as { idempotent?: boolean }).idempotent).toBeUndefined();
+  expect(store.getLoop((a.body as { id: string }).id)!.machineId).toBe(machineA);
+  expect(store.getLoop((b.body as { id: string }).id)!.machineId).toBe(machineB);
+});
+
+test("cli new: an EXPIRED idempotency key allows a genuine re-create (TTL window elapsed)", () => {
+  const { deviceToken, machineId } = seededCli();
+  // Seed a stale record (older than the 15-min window) for a known key, pointing at a
+  // loop that no longer needs to be returned — the read must drop it and create fresh.
+  tokens.recordNewIdempotency("stale-key", machineId, "loop-ancient", Date.now() - (tokens.NEW_IDEMPOTENCY_TTL_MS + 1000));
+  const res = gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Fresh", cron: "0 6 * * 1", taskFile: "x", idempotencyKey: "stale-key" })]);
+  expect(res.status).toBe(200);
+  const body = res.body as { id: string; idempotent?: boolean };
+  expect(body.idempotent).toBeUndefined(); // NOT a replay — the stale key expired
+  expect(body.id).not.toBe("loop-ancient");
+  expect(store.getLoop(body.id)!.machineId).toBe(machineId);
+});
+
+test("cli edit --json '{}': an empty patch is a valid no-op (nothing to change + the editable keys), exit 0", () => {
+  const { deviceToken, loop } = seededCli();
+  const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", "{}"]);
+  expect(res.status).toBe(200);
+  const body = res.body as { ok: boolean; applied: string[]; nothingToChange?: boolean; text: string; exitCode: number };
+  expect(body.ok).toBe(true);
+  expect(body.applied).toEqual([]);
+  expect(body.nothingToChange).toBe(true);
+  expect(body.text).toContain("nothing to change:");
+  expect(body.text).toContain("editable[");
+  expect(body.text).toContain("cron"); // the allowed-key list is surfaced
+  expect(body.exitCode).toBe(0);
+});
+
+test("cli edit --dry-run: a rejection flips the header, lists changes + rejections, and exits 1", () => {
+  const { deviceToken, loop } = seededCli();
+  const res = gateway().cli(deviceToken, ["edit", loop.id, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "sometimes" }), "--dry-run"]);
+  // A dry-run with a rejection is not ok → exit 1 (the error contract).
+  const body = res.body as { ok: boolean; changes: any[]; rejections: any[]; text: string; exitCode: number };
+  expect(body.ok).toBe(false);
+  expect(body.exitCode).toBe(1);
+  expect(body.changes.map((c) => c.key)).toEqual(["cron"]);
+  expect(body.rejections.map((r) => r.key)).toEqual(["notify"]);
+  const text = body.text;
+  expect(text).toContain("1 change valid, 1 rejected");
+  expect(text).toContain("changes[1]{key,from,to}:");
+  expect(text).toContain("rejections[1]{key,reason}:");
 });

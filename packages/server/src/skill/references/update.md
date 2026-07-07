@@ -29,6 +29,10 @@ First find the loop id (only loops bound to THIS machine are listed):
 #    loop-yyyy  paused  0 * * * *                 Hourly metrics
 ```
 
+The default columns are `id`/`name`/`cron`/`enabled`/`nextFire`; add more with
+`--fields` (comma-separated, from `timezone`,`notify`,`model`,`goal`,`taskFile`,
+`runs`,`lastOutcome`) — an unknown field fails loud.
+
 Before reshaping a loop, see how its recent runs actually went with
 `<loopany-cli> log` (the loop for the current directory) or
 `<loopany-cli> log <loop-id>` (`--limit N`, `--json`; `--transcript` for the full
