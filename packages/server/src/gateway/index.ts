@@ -23,7 +23,7 @@ import * as store from "../db/store.js";
 import type { CodingAgent, ControlAction, Loop, NewLoop, NotifyPolicy, Run, RunArtifact, RunRole, RunStatus, RunUsage, StateField, TranscriptStep } from "../db/schema.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
-import { completionMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
+import { autopauseMessage, completionMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { BLOB_CAP, isIgnoredPath, isValidHash, looksBinary, safeRelPath, sha256Buf } from "./artifacts.js";
@@ -69,6 +69,13 @@ import {
 const log = logger.child({ mod: "gateway" });
 
 export const ONLINE_TTL_MS = 30_000;
+/** Circuit breaker: auto-pause a loop after this many CONSECUTIVE failed exec
+ *  runs (`skipped` is transparent — the streak counts only phase `error`). A
+ *  loop failing every tick burns credits and attention until a human notices
+ *  (the anti-spam alert cadence means most failures are silent); past this bar
+ *  the honest move is to stop the bleeding and say so once. 0 disables. */
+const AUTOPAUSE_STREAK = Math.max(0, Number(process.env.LOOPANY_FAILURE_AUTOPAUSE_STREAK ?? 10));
+
 /** How long a DEFERRED pending run (machine asleep/offline at fire time) stays
  *  claimable before it retires as `skipped`. Generous on purpose — the next cron
  *  fire usually supersedes it long before this; the horizon only bounds a loop
@@ -264,6 +271,17 @@ export class MachineGateway {
     const loop = await store.getLoop(loopId);
     if (!loop) return;
     const streak = await store.execFailureStreak(loopId);
+    // Circuit breaker BEFORE the alert: at the threshold the loop is paused
+    // (enabled=false, unscheduled) and the single autopause note SUBSUMES the
+    // failure alert — pausing stops the run stream, so this is the last push
+    // until a human re-enables it. A plain pause: re-enabling resumes as usual.
+    if (AUTOPAUSE_STREAK > 0 && streak >= AUTOPAUSE_STREAK && loop.enabled) {
+      await store.updateLoop(loopId, { enabled: false });
+      this.scheduler.removeLoop(loopId);
+      log.warn({ loopId, streak }, "circuit breaker: auto-paused after consecutive exec failures");
+      if (loop.notify !== "never") this.pushNotify(loop, autopauseMessage(streak));
+      return;
+    }
     if (shouldNotifyFailure(loop.notify, streak)) {
       this.pushNotify(loop, failureMessage(reason));
     }
@@ -362,7 +380,7 @@ export class MachineGateway {
           if (presence === "offline" && run.role === "exec" && run.progress?.label !== DEFERRED_LABEL) {
             await store.updateRun(run.id, { progress: { step: 0, label: DEFERRED_LABEL, at: nowIso() } });
             const loop = await store.getLoop(run.loopId);
-            if (loop && loop.notify !== "never") void this.notify(loop, deferredMessage());
+            if (loop && loop.notify !== "never") this.pushNotify(loop, deferredMessage());
           }
         }
       } else if (run.phase === "running") {

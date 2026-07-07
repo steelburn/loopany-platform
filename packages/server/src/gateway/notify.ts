@@ -95,6 +95,16 @@ export function failureMessage(reason?: string | null): string {
 }
 
 /**
+ * The one-shot note sent when the circuit breaker auto-pauses a loop after a
+ * long consecutive-failure streak. It replaces (never joins) the failure alert
+ * for that run, and is the LAST push until a human re-enables the loop — so it
+ * must name both the state change and the way back.
+ */
+export function autopauseMessage(streak: number): string {
+  return `\u23f8 Paused automatically after ${streak} failed runs in a row. Fix the underlying issue, then re-enable the loop from its page - it resumes on its normal schedule.`;
+}
+
+/**
  * The calm FYI for a scheduled run WAITING on an offline machine. Nothing
  * failed: the run is deferred (the pending row is the queue) and executes when
  * the machine reconnects; meanwhile each newer fire supersedes the older one,

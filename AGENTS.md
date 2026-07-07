@@ -423,6 +423,11 @@ computes pure functions. Run instructions: `README.md`.
   distinguishing an interrupted running run from a skipped scheduled one (no more
   "📵 appears offline"). Banner/string edits in `LoopDetailView`: entities in JS
   STRING literals are not decoded — write `&`, not `&amp;` (only JSX text decodes).
+- **Circuit breaker**: `notifyRunFailure` auto-pauses a loop at
+  `LOOPANY_FAILURE_AUTOPAUSE_STREAK` (default 10, 0=off) consecutive exec
+  failures - `enabled=false` + unschedule + ONE autopause note that SUBSUMES the
+  failure alert (silent under `notify:"never"`; a plain pause, re-enable resumes).
+  `skipped` runs are transparent to the streak (it counts only phase `error`).
 - Failure alerting: notifications fire on failure too (`report()` !ok + sweep
   reclaim). Anti-spam streak derives from persisted run rows (exact, deploy-safe):
   notify at streak 1, then every 5th; a success resets. Only exec failures notify;

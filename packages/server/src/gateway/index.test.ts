@@ -1406,6 +1406,53 @@ test("a deferred pending run on an OFFLINE machine gets ONE calm note, stays cla
   expect((await store.getRun(run.id))!.phase).toBe("running");
 });
 
+test("circuit breaker: the 10th consecutive exec failure auto-pauses the loop with ONE note (skipped runs transparent)", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  const { sent, fn } = recordingNotify();
+  const gw = gateway(fn);
+
+  // 9 consecutive failures already on record, with a `skipped` slot in between —
+  // skipped rides phase `canceled`, so it must neither count nor reset the streak.
+  const base = Date.now() - 60 * 60_000;
+  for (let i = 0; i < 9; i++) {
+    (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "error", outcome: "error", role: "exec", ts: new Date(base + i * 60_000).toISOString() }));
+    if (i === 4) (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "canceled", outcome: "skipped", role: "exec", ts: new Date(base + i * 60_000 + 30_000).toISOString() }));
+  }
+
+  // The 10th failure arrives as a real failing report — the breaker trips.
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
+  const rt = (await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true }));
+  (await gw.report(rt, { ok: false, error: "boom", durationMs: 1 }));
+
+  expect((await store.getLoop(loop.id))!.enabled).toBe(false);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.message).toMatch(/paused automatically/i);
+  expect(sent[0]!.message).toMatch(/10/);
+});
+
+test("circuit breaker: notify=never still pauses, silently", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" }));
+  const { sent, fn } = recordingNotify();
+  const gw = gateway(fn);
+
+  const base = Date.now() - 60 * 60_000;
+  for (let i = 0; i < 9; i++) {
+    (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "error", outcome: "error", role: "exec", ts: new Date(base + i * 60_000).toISOString() }));
+  }
+  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
+  const rt = (await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true }));
+  (await gw.report(rt, { ok: false, error: "boom", durationMs: 1 }));
+
+  expect((await store.getLoop(loop.id))!.enabled).toBe(false);
+  expect(sent).toHaveLength(0);
+});
+
 test("a deferred pending run past the catch-up horizon retires as `skipped` — no error, no alert", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
