@@ -38,8 +38,10 @@ computes pure functions. Run instructions: `README.md`.
 - Prod: nitro build, then `pnpm start` = `scripts/prestart.mjs` +
   `node .output/server/index.mjs`. prestart applies pending migrations via the
   postgres-js migrator over `DIRECT_DATABASE_URL` for the hosted Supabase tier
-  (when `DATABASE_URL` is set); the embedded pglite tier migrates in-process at
-  boot, so prestart is a no-op there.
+  (when `DATABASE_URL` is set; fails loud if that would route DDL over the :6543
+  pooler); the embedded pglite tier migrates in-process at boot - prestart just
+  gates it (no `DATABASE_URL` requires the explicit `LOOPANY_DB=pglite` opt-in,
+  exit 1 otherwise, so a lost DB secret can't silently boot an empty pglite).
 
 ## Core model
 
