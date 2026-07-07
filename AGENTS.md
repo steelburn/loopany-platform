@@ -17,7 +17,8 @@ computes pure functions. Run instructions: `README.md`.
   - `src/scheduler/` - cron engine (tick -> pending run -> Dispatcher).
   - `src/gateway/` - machine gateway (poll/agent-api/report/sync/blob), run tokens,
     delivery, prompt, notify, blobstore (R2/in-memory), artifacts, retention/GC.
-  - `src/db/` - Drizzle schema (machines/loops/runs/blobs/artifact_files/run_snapshots)
+  - `src/db/` - Drizzle schema
+    (machines/loops/runs/blobs/artifact_files/run_snapshots/run_leases/connect_keys)
     + store + auth-schema.
   - `src/server/` - boot (`ensureServer`), adapters (Loop/Run -> JobSummary/JobDetail),
     loopApi server fns.
@@ -268,7 +269,7 @@ computes pure functions. Run instructions: `README.md`.
   data loss). Per-loop 500MB cap enforced at `sync()` AND authoritatively at
   `putBlob` (real byte length; also handshake-gated - only accepts hashes the sync
   asked THIS machine for, so a device token is not an uncapped write channel).
-  `store.deleteLoop` cascades runs/artifact_files/run_snapshots.
+  `store.deleteLoop` cascades runs/run_leases/artifact_files/run_snapshots.
 
 ## Security / hardening invariants
 
