@@ -44,7 +44,9 @@ Management
                           --limit N).
 
 Interactive (edit loops from your own agent session, using the stored device token)
-  loops                   List your loops.
+  loops [--fields a,b]    List your loops. Default columns are id/name/cron/
+                          enabled/nextFire; --fields adds any of timezone,notify,
+                          model,goal,taskFile,runs,lastOutcome.
   edit <id> --json '<obj>'  Edit a loop (JSON-only + --workflow-file/--ui-file/
     [--dry-run]           --schema-file; --dry-run previews before/after).
 

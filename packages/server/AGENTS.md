@@ -111,7 +111,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   a different `--tz`, `--connect-key`/team, `--agent`, or config field — yields a DISTINCT
   key so genuinely-different creates never collide. Deliberate, documented deviation from
   the literal §8.1 "config-without-nonce" wording (intent: collapse exactly the retry
-  case). Sent on REAL creates only (a dry-run creates nothing). Server treats the key as opaque — no server-side change. Server keeps an in-memory `newIdempotency` map
+  case). Sent on REAL creates only (a dry-run creates nothing). Server keeps an in-memory `newIdempotency` map
   (`tokens.ts`, 15-min TTL `NEW_IDEMPOTENCY_TTL_MS`, pruned on write like
   `claimIntents`); `readNewIdempotency(key, machineId)` also rechecks the record's
   machineId (a cross-machine key never replays another machine's loop) and
