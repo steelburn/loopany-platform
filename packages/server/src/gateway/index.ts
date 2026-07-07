@@ -213,6 +213,15 @@ export class MachineGateway {
    *  running a second pass concurrently (idempotent but wasteful + double-counts). */
   private maintenanceRunning = false;
 
+  /** Fire-and-forget push through the injected notifier, rejection-guarded: the
+   *  real dispatchNotification never lets its network call throw, but its leading
+   *  store read can reject (transient DB error) - and every caller is a bare
+   *  fire-and-forget off a hot path, where an escaped rejection is process-fatal
+   *  under Node's default unhandled-rejection policy. */
+  private pushNotify(loop: Loop, message: string): void {
+    void this.notify(loop, message).catch((err) => log.warn({ loop: loop.id, err: String(err) }, "notify failed"));
+  }
+
   /**
    * Alert the user that an exec run FAILED (error / timeout / machine-offline),
    * through the loop's chosen channel, gated by the anti-spam streak policy
@@ -227,7 +236,7 @@ export class MachineGateway {
     if (!loop) return;
     const streak = await store.execFailureStreak(loopId);
     if (shouldNotifyFailure(loop.notify, streak)) {
-      void this.notify(loop, failureMessage(reason));
+      this.pushNotify(loop, failureMessage(reason));
     }
   }
 
@@ -1390,7 +1399,7 @@ export class MachineGateway {
         // (a cheap, honest correction), gated by the loop's normal notify policy.
         const loop = await store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
-          void this.notify(loop, finalized.message);
+          this.pushNotify(loop, finalized.message);
         }
       }
       // A genuine late FAILURE is recorded honestly but does NOT re-notify: the
@@ -1498,7 +1507,7 @@ export class MachineGateway {
         // Success: gate on the loop's notify policy + the run's content status.
         const loop = await store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
-          void this.notify(loop, finalized.message);
+          this.pushNotify(loop, finalized.message);
         }
       } else {
         // Failure: surface it (silent failure is the BYOA default failure mode),
@@ -1577,7 +1586,7 @@ export class MachineGateway {
     // Completion is a distinct terminal event — notify unless the user opted out
     // of all pushes (notify: "never"). Best-effort (void), like the report path.
     if (loop && loop.notify !== "never") {
-      void this.notify(loop, completionMessage(reason, message));
+      this.pushNotify(loop, completionMessage(reason, message));
     }
     log.info({ runId: lease.runId, loopId: lease.loopId }, "finish: loop completed");
     return { ok: true, detail: "loop finished — goal met, loop completed" };
