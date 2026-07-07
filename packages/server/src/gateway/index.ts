@@ -2388,9 +2388,11 @@ function renderTranscript(steps: TranscriptStep[] | null | undefined): { text: s
 }
 
 // ---- TOON render helpers (batch 1: the axi-conformance spine) ----------------
-// Each builds the `text` a `/api/machine/cli` verb carries ALONGSIDE its structured
-// fields (superset body). Pure — no I/O, no clock — so they're exercised both here
-// (via the verb tests) and directly in `toon.test.ts`.
+// Each builds the `text` a `/api/machine/cli` verb carries. Batch 1 carried it
+// ALONGSIDE the handler's structured fields (superset body); batch 7's `finalizeCli`
+// strips those at the cli boundary (the legacy endpoints, which skip `finalizeCli`,
+// keep them). Pure — no I/O, no clock — so they're exercised both here (via the verb
+// tests) and directly in `toon.test.ts`.
 
 /** Compact a stored ISO timestamp to `YYYY-MM-DD HH:MM` (UTC, as stored) for a TOON
  *  cell — a date the agent reads at a glance without the `T`/seconds/zone noise. */

@@ -490,9 +490,10 @@ computes pure functions. Run instructions: `README.md`.
   a run token; the caller-supplied device fallback (`/api/machine/loop` GET/POST/PATCH,
   `/api/machine/log`) for owner verbs — one release of back-compat. `callback.ts` /
   `interactive.ts` / `log.ts` / `create.ts` all converge onto it (batch 6 adds
-  `show`/`home` to the convergence, and every server-verb path now PREFERS the server's
-  `body.text`+`exitCode` via `cli-client.ts` `printText`, keeping the structured renders
-  as a one-release old-server fallback); the LOCAL verbs
+  `show`/`home` to the convergence, and every server-verb path now PRINTS the server's
+  `body.text`+`exitCode` via `cli-client.ts` `printTextOrTooOld` — batch 7 retired the
+  one-release structured-render fallback, so a `text`-less pre-0.12 server surfaces a
+  definitive `SERVER_TOO_OLD` error, `home` a `tooOldHome`); the LOCAL verbs
   (up/down/update/skill/status/setup/help/version + the `--foreground`/detached daemon
   launch) keep their own fast-paths and never touch the server. `log`'s cwd→loop resolution stays CLIENT-side (lists loops,
   then posts `log <id>`) because the server's `log` dispatch needs an explicit id.
