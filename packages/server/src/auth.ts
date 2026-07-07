@@ -107,7 +107,7 @@ export async function requestScope(): Promise<RequestScope> {
   if (!enforce) {
     // Open mode ⇒ the single shared workspace; no sign-in, no admin, no switching.
     const teamId = store.teamIdForUser(null);
-    store.ensureTeam(teamId, "Shared Workspace", null);
+    await store.ensureTeam(teamId, "Shared Workspace", null);
     return { enforce, userId: null, teamId, isAdmin: false, allTeams: false };
   }
 
@@ -116,7 +116,7 @@ export async function requestScope(): Promise<RequestScope> {
   const personalTeam = store.teamIdForUser(userId);
   // Ensure the personal/placeholder team exists (covers pre-hook users etc.) and
   // keep its name in sync with the email — also renames pre-existing teams.
-  store.ensureTeam(personalTeam, userId ? teamNameForEmail(user?.email) : "Shared Workspace", userId);
+  await store.ensureTeam(personalTeam, userId ? teamNameForEmail(user?.email) : "Shared Workspace", userId);
 
   const isAdmin = isSuperAdmin(user?.email);
   const sel = await selectedTeam();
@@ -125,7 +125,7 @@ export async function requestScope(): Promise<RequestScope> {
   }
   // A specific team: admins may pick any existing team; others only their own.
   if (sel && sel !== personalTeam && userId) {
-    const ok = isAdmin ? !!store.getTeam(sel) : store.isTeamMember(sel, userId);
+    const ok = isAdmin ? !!(await store.getTeam(sel)) : await store.isTeamMember(sel, userId);
     if (ok) return { enforce, userId, teamId: sel, isAdmin, allTeams: false };
   }
   return { enforce, userId, teamId: personalTeam, isAdmin, allTeams: false };
@@ -170,7 +170,7 @@ export const auth = betterAuth({
         after: async (user) => {
           try {
             const teamId = store.teamIdForUser(user.id);
-            store.ensureTeam(teamId, teamNameForEmail(user.email), user.id);
+            await store.ensureTeam(teamId, teamNameForEmail(user.email), user.id);
           } catch {
             /* non-fatal: requestScope's lazy ensureTeam backstops this */
           }

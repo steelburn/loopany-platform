@@ -104,7 +104,7 @@ export async function loopsForMachine(machineId: string): Promise<Loop[]> {
 export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "updatedAt"> & { id?: string }): Promise<Loop> {
   const ts = nowIso();
   const row: NewLoop = { ...input, id: input.id ?? newLoopId(), createdAt: ts, updatedAt: ts };
-  return (await db.insert(loops).values(row).returning())[0];
+  return (await db.insert(loops).values(row).returning())[0]!;
 }
 
 /**
@@ -166,7 +166,7 @@ export async function deleteLoop(id: string): Promise<boolean> {
 
 export async function addRun(input: Omit<NewRun, "id"> & { id?: string }): Promise<Run> {
   const row: NewRun = { ...input, id: input.id ?? randomUUID() };
-  return (await db.insert(runs).values(row).returning())[0];
+  return (await db.insert(runs).values(row).returning())[0]!;
 }
 
 export async function getRun(id: string): Promise<Run | undefined> {
@@ -327,7 +327,7 @@ export async function getMachine(id: string): Promise<Machine | undefined> {
 }
 
 export async function createMachine(input: Omit<NewMachine, "createdAt"> & { id: string }): Promise<Machine> {
-  return (await db.insert(machines).values({ ...input, createdAt: nowIso() }).returning())[0];
+  return (await db.insert(machines).values({ ...input, createdAt: nowIso() }).returning())[0]!;
 }
 
 export async function updateMachine(id: string, patch: Partial<NewMachine>): Promise<Machine | undefined> {
@@ -439,7 +439,7 @@ export async function createChannel(input: Omit<NewNotificationChannel, "id" | "
     id: input.id ?? `ch-${randomUUID().slice(0, 12)}`,
     createdAt: nowIso(),
   };
-  return (await db.insert(notificationChannels).values(row).returning())[0];
+  return (await db.insert(notificationChannels).values(row).returning())[0]!;
 }
 
 export async function deleteChannel(id: string): Promise<boolean> {
