@@ -11,6 +11,13 @@
  * from the structured loop list. The in-run bare `loopany` is handled separately
  * (cli.ts routes it to the callback as `home` on the run credential).
  *
+ * Bounded on the hot path (feedback follow-up): batch 6 runs this home view on EVERY
+ * SessionStart via the installed hook, so the network round-trip must degrade fast. The
+ * home POST goes through `boundedFetch` (a few-second timeout + AbortSignal), so an
+ * unreachable-but-not-refused server (a hung TCP connection) fails fast to a DEFINITIVE
+ * degraded home (`server unreachable`) instead of stalling session start until the OS
+ * timeout. Interactive verbs keep their own fetch budgets.
+ *
  * Every external touch (fetch, cwd, homedir, pid, server, output) is an injectable
  * seam so tests need no real process/network/~.loopany.
  */
@@ -20,7 +27,17 @@ import { existingBinShim } from "./bin-shim.js";
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printText } from "./cli-client.js";
 import { resolveServerUrl } from "./config.js";
+import { boundedFetch } from "./http.js";
 import { verifiedRunningPid } from "./pidfile.js";
+
+/** The SessionStart hot path budget: fail fast to a degraded home rather than stall a
+ *  session on a hung server. */
+const HOME_TIMEOUT_MS = 4_000;
+
+/** `fetch` bounded to `HOME_TIMEOUT_MS` — the default home transport (tests inject
+ *  their own `fetchImpl`). */
+const boundedHomeFetch = ((url: string, init?: RequestInit) =>
+  boundedFetch(String(url), init ?? {}, HOME_TIMEOUT_MS)) as unknown as typeof fetch;
 
 export interface HomeDeps {
   fetchImpl?: typeof fetch;
@@ -58,7 +75,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   if (serverDisplay) ctx.push("--server", serverDisplay);
 
   const cliDeps: PostCliDeps = {
-    fetchImpl: injected.fetchImpl,
+    fetchImpl: injected.fetchImpl ?? boundedHomeFetch,
     ...("server" in injected ? { server: injected.server } : {}),
     ...("token" in injected ? { deviceToken: injected.token } : {}),
   };
@@ -78,7 +95,13 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
     return 0;
   }
   if (r.kind === "read-error") return out(`error: "cannot read ${r.path}"\ncode: ERROR\n`), 1;
-  if (r.kind === "network-error") return out(`error: ${JSON.stringify(r.message)}\ncode: ERROR\n`), 1;
+  // Unreachable / hung server (incl. a bounded-fetch timeout on the SessionStart hot
+  // path): render a DEFINITIVE degraded home — never hang, never empty, never a raw
+  // error line that would surface the ambient hook as a failure.
+  if (r.kind === "network-error") {
+    out(degradedHome(serverDisplay, r.message));
+    return 0;
+  }
 
   // Text-sink primary: print the server's rendered TOON home.
   const code = printText(r.body, r.status, out);
@@ -99,6 +122,18 @@ function notConnectedHome(): string {
     "help[2]:\n" +
     "  Run `loopany up --server-url <url> --connect-key <dk_…>` to connect this machine\n" +
     "  Run `loopany --help` to see every command\n"
+  );
+}
+
+/** The definitive DEGRADED home when the server is unreachable or hung (the machine IS
+ *  configured, so this isn't the not-connected view). Never empty; exits 0 so the
+ *  SessionStart hook never surfaces as a failure. */
+function degradedHome(server: string, reason: string): string {
+  return (
+    "description: Run your scheduled Loopany agent loops on this machine with your own coding agent.\n" +
+    `machine: configured${server ? ` · ${server}` : ""} — server unreachable right now (${reason})\n` +
+    "help[1]:\n" +
+    "  Run `loopany loops` once the server is reachable to list this machine's loops\n"
   );
 }
 

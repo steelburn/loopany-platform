@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { binDirCandidates, dirOnPath, ensureBinShim, existingBinShim, isEphemeralEntry, shimContents } from "./bin-shim.js";
+import { binDirCandidates, dirOnPath, ensureBinShim, existingBinShim, isEphemeralEntry, resolveDurableCommand, shimContents } from "./bin-shim.js";
 
 describe("binDirCandidates", () => {
   test("prefers the npm global bin (npm_config_prefix) then ~/.local/bin", () => {
@@ -158,5 +158,24 @@ describe("existingBinShim", () => {
     const found = path.join("/home/u", ".local", "bin", "loopany");
     expect(existingBinShim({ env: {}, homedir: () => "/home/u", exists: (p) => p === found })).toBe(found);
     expect(existingBinShim({ env: {}, homedir: () => "/home/u", exists: () => false })).toBeNull();
+  });
+});
+
+describe("resolveDurableCommand", () => {
+  test("our shim in a candidate dir → that absolute path", () => {
+    const shim = path.join("/home/u", ".local", "bin", "loopany");
+    expect(resolveDurableCommand({ env: {}, homedir: () => "/home/u", exists: (p) => p === shim })).toBe(shim);
+  });
+
+  test("no candidate shim but a `loopany` on PATH → bare `loopany`", () => {
+    const onPath = path.join("/usr/local/bin", "loopany");
+    expect(
+      resolveDurableCommand({ env: { PATH: `/usr/bin${path.delimiter}/usr/local/bin` }, homedir: () => "/home/u", exists: (p) => p === onPath }),
+    ).toBe("loopany");
+  });
+
+  test("nothing durable (npx-without-global) → null", () => {
+    expect(resolveDurableCommand({ env: { PATH: "/usr/bin" }, homedir: () => "/home/u", exists: () => false })).toBeNull();
+    expect(resolveDurableCommand({ env: {}, homedir: () => "/home/u", exists: () => false })).toBeNull();
   });
 });

@@ -74,6 +74,18 @@ describe("runHome", () => {
     expect(calls[0]!.argv).toEqual(["home", "--cwd", "/work/here", "--home", "/home/u"]);
   });
 
+  test("hung/unreachable server (fetch rejects, e.g. a bounded-fetch timeout) → DEFINITIVE degraded home, exit 0", async () => {
+    const fetchFn = (async () => {
+      throw new Error("The operation was aborted due to timeout");
+    }) as unknown as typeof fetch;
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runHome(cap.deps)).toBe(0);
+    expect(cap.stdout()).toContain("machine: configured");
+    expect(cap.stdout()).toContain("server unreachable right now");
+    expect(cap.stdout()).toContain("timeout");
+    expect(cap.stdout()).not.toContain("code: ERROR");
+  });
+
   test("old server (no `home` verb → 404): renders a minimal home from the loops fallback", async () => {
     const { fetchFn } = stub((url) =>
       url.includes("/api/machine/cli")

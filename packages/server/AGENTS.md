@@ -192,7 +192,15 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   `~/.claude/settings.json`, a `{hooks:[{type:"command",command:"loopany"}]}` SessionStart
   entry whose stdout lands as ambient context; other agents reported `skipped`). Matches
   gh-axi UX (integrations report + restart hint). `loopany up`/`update` call the
-  best-effort `refreshHooks` (one line, never blocks — like the skill install).
+  best-effort `refreshHooks` (one line, never blocks — like the skill install). The
+  ambient hook ONLY installs with a DURABLE on-PATH `loopany` (`resolveDurableCommand`:
+  our shim OR a PATH-resolvable global install): the automatic `refreshHooks` path SKIPS
+  it with one line of `npm i -g` guidance when only a bare, non-PATH `loopany` would
+  result (the common npx-without-global flow — a hook pointing at a missing binary would
+  fail every session); the explicit `setup hooks` verb still installs but warns before
+  the bare fallback. The `home` view fetch is BOUNDED (`http.ts` `boundedFetch`,
+  `HOME_TIMEOUT_MS`) so the SessionStart hot path degrades fast — a hung server renders a
+  DEFINITIVE degraded home (`server unreachable`, exit 0), never stalling session start.
 - **PATH shim** (`bin-shim.ts`, feedback #4): `loopany up`/`update` write a `loopany`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance when the dir

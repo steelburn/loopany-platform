@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { runSetup } from "./setup.js";
+import { refreshHooks, runSetup } from "./setup.js";
 
 /** An in-memory settings file keyed by absolute path, backing the fs seams. */
 function fakeFs(seed: Record<string, string> = {}) {
@@ -108,5 +108,36 @@ describe("runSetup hooks", () => {
     const f = fakeFs();
     expect(await runSetup(["bogus"], f.deps)).toBe(2);
     expect(f.err()).toContain("unknown setup command");
+  });
+
+  test("no durable `loopany`: the explicit verb still installs (bare) but warns", async () => {
+    const f = fakeFs();
+    // Drop the injected shim path so resolution runs; report no durable bin.
+    const deps = { ...f.deps, command: undefined, resolveCommand: () => null };
+    expect(await runSetup(["hooks"], deps)).toBe(0);
+    const ss = sessionStart(f.files.get(f.settingsPath)!);
+    expect(ss).toHaveLength(1);
+    expect(ss[0].hooks[0].command).toBe("loopany"); // bare fallback
+    expect(f.err()).toContain("no durable `loopany` on PATH");
+    expect(f.err()).toContain("npm i -g @crewlet/loopany");
+  });
+});
+
+describe("refreshHooks (automatic up/update path)", () => {
+  test("no durable `loopany` → installs NO hook and prints skip guidance", async () => {
+    const f = fakeFs();
+    await refreshHooks({ ...f.deps, command: undefined, resolveCommand: () => null });
+    expect(f.files.size).toBe(0); // never wrote a settings.json
+    expect(f.out()).toContain("skipped the SessionStart hook");
+    expect(f.out()).toContain("npm i -g @crewlet/loopany");
+  });
+
+  test("durable `loopany` → installs the hook with the resolved command", async () => {
+    const f = fakeFs();
+    await refreshHooks({ ...f.deps, command: undefined, resolveCommand: () => "/opt/node/bin/loopany" });
+    const ss = sessionStart(f.files.get(f.settingsPath)!);
+    expect(ss).toHaveLength(1);
+    expect(ss[0].hooks[0].command).toBe("/opt/node/bin/loopany");
+    expect(f.out()).toContain("SessionStart home view");
   });
 });

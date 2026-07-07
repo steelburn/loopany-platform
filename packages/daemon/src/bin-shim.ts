@@ -22,6 +22,11 @@
  *      with the re-exec marker); a real `npm i -g` binary is left untouched. Refreshing
  *      our own shim is idempotent.
  *
+ * `resolveDurableCommand` reuses the same durability test for the ambient SessionStart
+ * hook (`setup.ts`): the hook only installs when a durable `loopany` (our shim OR a
+ * PATH-resolvable global install) exists, so the common npx-without-global flow never
+ * writes a hook that would fail every session with `loopany: command not found`.
+ *
  * Every external touch (write, mkdir, read, homedir, PATH, entry) is an injectable
  * seam so tests never write into the real home dir.
  */
@@ -167,4 +172,29 @@ export function existingBinShim(injected: { env?: NodeJS.ProcessEnv; homedir?: (
     if (exists(p)) return p;
   }
   return null;
+}
+
+/** Is a `loopany` executable resolvable in any `PATH` directory (a real global
+ *  install that isn't in our own candidate dirs)? */
+function loopanyOnPath(pathVar: string | undefined, exists: (p: string) => boolean): boolean {
+  if (!pathVar) return false;
+  return pathVar.split(path.delimiter).some((dir) => dir !== "" && exists(path.join(dir, "loopany")));
+}
+
+/**
+ * Resolve a DURABLE `loopany` command for the ambient SessionStart hook: our installed
+ * shim (`existingBinShim`) or any `loopany` executable resolvable on PATH (a real
+ * global install). Returns null when only a BARE, non-PATH `loopany` would result —
+ * the common `npx @crewlet/loopany@latest up` flow where the shim was skipped as
+ * ephemeral and there is no global install. The caller then SKIPS the hook (the
+ * automatic up/update path) or warns before falling back to bare (the explicit verb),
+ * so we never install a SessionStart hook that fails every session with
+ * `loopany: command not found`.
+ */
+export function resolveDurableCommand(injected: { env?: NodeJS.ProcessEnv; homedir?: () => string; exists?: (p: string) => boolean } = {}): string | null {
+  const shim = existingBinShim(injected);
+  if (shim) return shim;
+  const env = injected.env ?? process.env;
+  const exists = injected.exists ?? ((p: string) => fs.existsSync(p));
+  return loopanyOnPath(env.PATH, exists) ? "loopany" : null;
 }

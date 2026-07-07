@@ -12,13 +12,21 @@
  * installer is added (the map is keyed by the same agent ids as `SKILL_TARGET_AGENTS`,
  * so covering a new agent is a one-entry addition, never a router change).
  *
+ * The hook only installs when a DURABLE `loopany` command is resolvable
+ * (`resolveDurableCommand`: our PATH shim OR a global install). The automatic
+ * up/update path (`refreshHooks`) SKIPS the hook with one line of guidance when only a
+ * bare, non-PATH `loopany` would result (the common `npx … up` flow with no global
+ * install) — a hook pointing at a missing binary would fail EVERY subsequent session.
+ * The explicit `loopany setup hooks` verb still installs (the user asked for it) but
+ * warns before falling back to bare `loopany`.
+ *
  * Every filesystem touch is an injectable seam so tests never read/write the real home.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { existingBinShim } from "./bin-shim.js";
+import { resolveDurableCommand } from "./bin-shim.js";
 import { SKILL_TARGET_AGENTS } from "./skill-install.js";
 
 export interface SetupDeps {
@@ -28,8 +36,12 @@ export interface SetupDeps {
   writeFile?: (p: string, s: string) => void;
   mkdir?: (p: string) => void;
   homedir?: () => string;
-  /** The command the hook runs — defaults to the installed PATH shim, else `loopany`. */
+  /** The command the hook runs. When set it is used verbatim (and treated as durable);
+   *  when absent it is resolved via `resolveCommand`. */
   command?: string;
+  /** Resolve the DURABLE hook command (our shim path or a PATH-resolvable `loopany`),
+   *  null when only a bare, non-PATH `loopany` would result. Injectable for tests. */
+  resolveCommand?: () => string | null;
   out?: (s: string) => void;
   err?: (s: string) => void;
 }
@@ -44,16 +56,23 @@ type Seams = {
   err: (s: string) => void;
 };
 
-function seams(d: SetupDeps): Seams {
+function seams(d: SetupDeps, command: string): Seams {
   return {
     readFile: d.readFile ?? ((p) => fs.readFileSync(p, "utf8")),
     writeFile: d.writeFile ?? ((p, s) => fs.writeFileSync(p, s)),
     mkdir: d.mkdir ?? ((p) => void fs.mkdirSync(p, { recursive: true })),
     homedir: d.homedir ?? os.homedir,
-    command: d.command ?? existingBinShim() ?? "loopany",
+    command,
     out: d.out ?? ((s) => void process.stdout.write(s)),
     err: d.err ?? ((s) => void process.stderr.write(s)),
   };
+}
+
+/** Resolve the DURABLE hook command: an explicitly-injected `command` (treated as
+ *  durable), else `resolveCommand()`. Null ⇒ only a bare, non-PATH `loopany` exists. */
+function durableCommand(d: SetupDeps): string | null {
+  if (d.command !== undefined) return d.command;
+  return (d.resolveCommand ?? resolveDurableCommand)();
 }
 
 type AgentOutcome = { agent: string; status: string };
@@ -123,7 +142,8 @@ const HOOK_INSTALLERS: Record<string, HookInstaller> = {
 };
 
 export async function runSetup(args: string[], injected: SetupDeps = {}): Promise<number> {
-  const s = seams(injected);
+  const durable = durableCommand(injected);
+  const s = seams(injected, durable ?? "loopany");
   const sub = args[0];
 
   if (sub === undefined) {
@@ -141,6 +161,13 @@ export async function runSetup(args: string[], injected: SetupDeps = {}): Promis
   }
 
   const remove = args.includes("--remove");
+  // The explicit verb still installs (the user asked for it), but a bare, non-PATH
+  // `loopany` hook fails every session — warn before falling back to it.
+  if (!remove && durable === null) {
+    s.err(
+      "loopany: no durable `loopany` on PATH — the SessionStart hook will run bare `loopany`; install globally for a stable bin: npm i -g @crewlet/loopany\n",
+    );
+  }
   const outcomes = installHooks(s, remove);
   reportHooks(s, outcomes, remove);
   return 0;
@@ -167,7 +194,17 @@ export function installHooks(s: Seams, remove: boolean): AgentOutcome[] {
  */
 export async function refreshHooks(injected: SetupDeps = {}): Promise<void> {
   try {
-    const s = seams(injected);
+    const command = durableCommand(injected);
+    // No durable `loopany` (npx-without-global): DON'T write a hook that would fail
+    // every session — skip with one line of guidance, mirroring the PATH shim's skip.
+    if (command === null) {
+      const out = injected.out ?? ((s: string) => void process.stdout.write(s));
+      out(
+        "loopany: skipped the SessionStart hook (no durable `loopany` on PATH); install globally for the ambient home view: npm i -g @crewlet/loopany\n",
+      );
+      return;
+    }
+    const s = seams(injected, command);
     const outcomes = installHooks(s, false);
     const done = outcomes.filter((o) => o.status === "installed" || o.status === "refreshed").map((o) => o.agent);
     s.out(done.length ? `loopany hooks: SessionStart home view → ${done.join(", ")}\n` : "loopany hooks: up to date\n");
