@@ -1,5 +1,9 @@
-# Loopany on Fly.io — ONE always-on machine (the scheduler owns the cron loop;
-# never scale to >1 or you'd double-fire). SQLite on a mounted volume.
+# Loopany STAGING on Fly.io — app "loopany-testing". ONE always-on machine (the
+# scheduler owns the cron loop; never scale to >1 or you'd double-fire).
+# DB: embedded pglite on the mounted volume by default; set DATABASE_URL /
+# DIRECT_DATABASE_URL secrets to point staging at a (separate) Supabase project.
+# Production is a SEPARATE app + config — see fly.prod.toml. This app auto-deploys
+# on push to main (deploy.yml); prod is manual/gated (deploy-prod.yml).
 #
 # Setup:
 #   fly launch --no-deploy           # create the app (edit the name below)

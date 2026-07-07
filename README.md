@@ -65,7 +65,7 @@ talking to your local coding agent.
 │  machine routes: /api/machine/cli (unified CLI dispatch) · /api/machine/poll     │
 │                  /machine/report · /api/machine/sync · /api/machine/blob/:hash    │
 │                  /agent-api/loop · /api/machine/loop|log (legacy CLI aliases)     │
-│  SQLite (Drizzle) on a volume · artifact bytes in object storage                 │
+│  Postgres (Drizzle; embedded pglite by default) · artifact bytes in object store │
 └───────────▲ HTTP short-poll ────────────────────────────────────────────────────┘
             │
 ┌───────────┴── @crewlet/loopany (your machine · `npx`) ──────────────────────────┐
@@ -98,8 +98,9 @@ pnpm dev            # http://127.0.0.1:3000
 ```
 
 That is a fully working server out of the box: auth is off (the app runs open),
-the SQLite DB lives in `~/.loopany`, and artifact bytes are held in memory. Use
-the Quickstart above against `http://127.0.0.1:3000` to connect a machine.
+the database is an embedded, file-backed **pglite** Postgres at `~/.loopany/pgdata`
+(zero external DB — it migrates itself at boot), and artifact bytes are held in
+memory. Use the Quickstart above against `http://127.0.0.1:3000` to connect a machine.
 
 All configuration is env-based - copy [`.env.example`](.env.example) to
 `packages/server/.env` and uncomment what you need.
@@ -114,7 +115,12 @@ pnpm start          # applies pending DB migrations, then serves on $PORT
 
 For a real deployment, set at minimum:
 
-- `LOOPANY_DATA_DIR` - a persistent directory for the SQLite DB.
+- **Database** - either point `DATABASE_URL` at a Postgres (e.g. Supabase; set
+  it to the transaction pooler `:6543`, plus `DIRECT_DATABASE_URL` at the direct
+  `:5432` URL for migrations), or leave both unset and give `LOOPANY_DATA_DIR` a
+  persistent directory - the embedded pglite database lives at `<dir>/pgdata`.
+  `pnpm start` applies pending migrations before serving (over the direct URL for
+  the hosted tier; in-process for the pglite tier).
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` + `LOOPANY_AUTH_SECRET` (a long
   random value) + `LOOPANY_BASE_URL` + `LOOPANY_ALLOWED_LOGINS` - gate sign-in
   behind GitHub. Leaving these unset runs the app **open, with no auth** - fine
@@ -127,12 +133,16 @@ For a real deployment, set at minimum:
 
 ### Docker
 
-The included [`Dockerfile`](Dockerfile) builds the server and stores data on a
-volume at `/data`:
+The included [`Dockerfile`](Dockerfile) builds the server. With no `DATABASE_URL`
+it runs the embedded pglite database on a volume at `/data`; with a `DATABASE_URL`
+(Supabase/any Postgres) the container is stateless and needs no volume:
 
 ```bash
 docker build -t loopany .
+# Embedded pglite (persist the DB on a volume):
 docker run -p 3000:3000 -v loopany-data:/data loopany
+# Or against Postgres (stateless):
+docker run -p 3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... loopany
 ```
 
 Pass configuration with `-e KEY=value` or `--env-file` (same variables as

@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "start": "drizzle-kit migrate && node .output/server/index.mjs",
+    "start": "node scripts/prestart.mjs && node .output/server/index.mjs",
     "routes:generate": "tsr generate",
     "typecheck": "tsr generate && tsc --noEmit",
     "test": "vitest run",
