@@ -3,7 +3,7 @@
  * (no R2/creds) through `getArtifactSync()` so the read helpers resolve the same
  * bytes the sync wrote. Covers the list/text/binary/oversize/not-found server-fn
  * core, the download route's byte resolver (path-safety + 404s), and the shared
- * loopInScope authorization predicate.
+ * canAccessLoop authorization predicate (membership-based, cross-team-link fix).
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -142,14 +142,30 @@ test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid byte
   expect((await artifacts.readLoopArtifactBytes(loop.id, "ghost.md")).status).toBe(404);
 });
 
-test("loopInScope gates by team (open mode + admin all-teams see everything)", () => {
+test("canAccessLoop authorizes by MEMBERSHIP, not the active team (cross-team-link fix)", async () => {
+  // Seed: u1 is a member of two teams (their active team A + a second team B), and
+  // NOT a member of team C. ensureTeam(id, name, ownerUserId) adds ownerUserId as a
+  // member, which is exactly "u1 can access this team".
+  await store.ensureTeam("team-cas-a", "A", "u1"); // active team
+  await store.ensureTeam("team-cas-b", "B", "u1"); // other team u1 belongs to
+  await store.ensureTeam("team-cas-c", "C", "u2"); // a team u1 is NOT in
+
   const open = { enforce: false, userId: null, teamId: "team-shared", isAdmin: false, allTeams: false };
-  expect(auth.loopInScope("team-x", open)).toBe(true); // open mode ⇒ all visible
+  expect(await auth.canAccessLoop("team-x", open)).toBe(true); // open mode ⇒ all visible
 
-  const scoped = { enforce: true, userId: "u1", teamId: "team-u1", isAdmin: false, allTeams: false };
-  expect(auth.loopInScope("team-u1", scoped)).toBe(true);
-  expect(auth.loopInScope("team-other", scoped)).toBe(false);
+  const scoped = { enforce: true, userId: "u1", teamId: "team-cas-a", isAdmin: false, allTeams: false };
+  expect(await auth.canAccessLoop("team-cas-a", scoped)).toBe(true); // active team (fast path)
+  // The reported bug: a loop in team B, opened while active team = A. u1 IS a member
+  // of B, so it must OPEN — not return not-found.
+  expect(await auth.canAccessLoop("team-cas-b", scoped)).toBe(true); // cross-team MEMBER
+  // A team u1 does not belong to stays denied — indistinguishable from a missing loop.
+  expect(await auth.canAccessLoop("team-cas-c", scoped)).toBe(false); // non-member
 
-  const admin = { enforce: true, userId: "a", teamId: "team-a", isAdmin: true, allTeams: true };
-  expect(auth.loopInScope("team-anything", admin)).toBe(true);
+  // A signed-out request (no userId) can't fall through to a membership check.
+  const anon = { enforce: true, userId: null, teamId: "team-cas-a", isAdmin: false, allTeams: false };
+  expect(await auth.canAccessLoop("team-cas-b", anon)).toBe(false);
+
+  // Superadmins retain cross-team visibility for any team.
+  const admin = { enforce: true, userId: "a", teamId: "team-a", isAdmin: true, allTeams: false };
+  expect(await auth.canAccessLoop("team-anything", admin)).toBe(true);
 });

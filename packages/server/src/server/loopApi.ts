@@ -26,7 +26,7 @@ import type {
   TranscriptStep,
 } from '../types'
 import * as store from '../db/store.js'
-import { ALL_TEAMS, loopInScope, requestScope } from '../auth.js'
+import { ALL_TEAMS, canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
 import { TEMPLATES } from './templates.js'
@@ -50,9 +50,11 @@ async function ownedLoop(id: string) {
   const loop = await store.getLoop(id)
   if (!loop) return undefined
   const scope = await requestScope()
-  // Admins in the "All teams" view may open/act on any team's loop; everyone
-  // else is confined to the active team (loopInScope is the shared gate).
-  if (!loopInScope(loop.teamId, scope)) return undefined
+  // Authorize by MEMBERSHIP in the loop's own team (canAccessLoop is the shared
+  // gate): a member of the loop's team may open it even when it isn't their active
+  // team, so a cross-team link works; a non-member is indistinguishable from a
+  // missing loop.
+  if (!(await canAccessLoop(loop.teamId, scope))) return undefined
   // Hand back the scope too — callers that mutate (e.g. patchJob) need `enforce`
   // and would otherwise re-run requestScope() (a second session decrypt).
   return { loop, enforce: scope.enforce, teamId: scope.teamId }
@@ -116,8 +118,20 @@ export const getJobDetail = createServerFn({ method: 'GET' })
   .handler(async ({ data: id }): Promise<JobDetail> => {
     await backend()
     const owned = await ownedLoop(id)
-    if (!owned) throw new Error('loop not found')
-    return toJobDetail(owned.loop)
+    // Generic, enumeration-safe copy: a nonexistent loop and one in a team the
+    // caller can't access return the SAME message (never confirm a loop exists to
+    // someone without access).
+    if (!owned) throw new Error('This loop does not exist, or you do not have access to it.')
+    const detail = await toJobDetail(owned.loop)
+    // Team context for the header: which team owns the loop and whether it's the
+    // caller's active team. Only under the gate (open mode is a single workspace).
+    // When it isn't the active team (a member opened a cross-team link), the header
+    // offers a "switch to this team" affordance.
+    if (owned.enforce && owned.loop.teamId) {
+      const team = await store.getTeam(owned.loop.teamId)
+      detail.team = { id: owned.loop.teamId, name: team?.name ?? 'Unknown team', isActive: owned.loop.teamId === owned.teamId }
+    }
+    return detail
   })
 
 /** GET — one older page of a loop's runs (cursor = `beforeTs`), for the card

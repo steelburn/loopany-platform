@@ -531,6 +531,32 @@ export function LoopDetailView({ id }: { id: string }) {
 
   const actionErrEl = actionErr && <ErrorBanner message={actionErr} onDismiss={() => setActionErr(null)} className="mb-2.5" />
 
+  // A member can open a loop in a team that isn't their active team (the loop page
+  // authorizes by membership, not the active-team cookie). We render it in the
+  // loop's own context WITHOUT silently switching the active team; this makes the
+  // switch explicit so the dashboard/back-nav can follow if the user wants it.
+  const crossTeam = detail.team && !detail.team.isActive ? detail.team : null
+  const switchTeam = (teamId: string) => {
+    document.cookie = `loopany.team=${encodeURIComponent(teamId)}; path=/; max-age=31536000; samesite=lax`
+    window.location.reload()
+  }
+  const crossTeamEl = crossTeam && (
+    <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border border-hairline bg-raised px-4 py-2.5">
+      <span className="inline-flex items-center gap-2 text-meta font-medium text-secondary">
+        <span aria-hidden className="size-2 rounded-full bg-interactive" />
+        Viewing a loop in {crossTeam.name}
+      </span>
+      <span className="text-meta text-secondary">- not your active team.</span>
+      <button
+        type="button"
+        onClick={() => switchTeam(crossTeam.id)}
+        className="ml-auto cursor-pointer text-meta font-medium text-interactive underline underline-offset-2 transition-colors hover:text-display"
+      >
+        Switch to this team
+      </button>
+    </div>
+  )
+
   const offlineEl = !online && (
     <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border border-hairline bg-raised px-4 py-2.5">
       <span className="inline-flex items-center gap-2 text-meta font-medium text-secondary">
@@ -611,6 +637,13 @@ export function LoopDetailView({ id }: { id: string }) {
               <Pill tone="outline" title="Recorded coding agent">
                 {agentLabel}
               </Pill>
+              {/* Cross-team context: this loop belongs to another of your teams,
+                  not your active one. A quiet chip; the switch is offered below. */}
+              {crossTeam && (
+                <Pill tone="outline" title="This loop belongs to another of your teams">
+                  {crossTeam.name}
+                </Pill>
+              )}
             </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-meta text-secondary">
               <span className="text-primary" title={job.cron}>
@@ -644,6 +677,7 @@ export function LoopDetailView({ id }: { id: string }) {
         </div>
 
         <div className="mt-5 border-t border-hairline pt-4">
+          {crossTeamEl}
           {offlineEl}
           {actionErrEl}
           {flashLine}

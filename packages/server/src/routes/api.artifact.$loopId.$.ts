@@ -37,8 +37,8 @@ export const Route = createFileRoute('/api/artifact/$loopId/$')({
         const store = await import('../db/store.js')
         const loop = await store.getLoop(loopId)
         if (!loop) return Response.json({ error: 'not found' }, { status: 404 })
-        const { requestScope, loopInScope } = await import('../auth.js')
-        if (!loopInScope(loop.teamId, await requestScope()))
+        const { requestScope, canAccessLoop } = await import('../auth.js')
+        if (!(await canAccessLoop(loop.teamId, await requestScope())))
           return Response.json({ error: 'not found' }, { status: 404 })
 
         const { readLoopArtifactBytes } = await import('../server/artifactFiles.js')

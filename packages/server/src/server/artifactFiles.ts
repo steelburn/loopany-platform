@@ -3,7 +3,7 @@
  * (no request/session context) so they're shared by the lazy server fns
  * (`getArtifacts` / `getArtifact` in loopApi) AND the download route, and are
  * directly unit-testable against the in-memory blob store — authorization is the
- * caller's job (the server fn via `ownedLoop`, the route via `loopInScope`).
+ * caller's job (the server fn via `ownedLoop`, the route via `canAccessLoop`).
  *
  * The bytes live in the gateway's BlobStore (R2 in prod, in-memory in dev/tests);
  * here we only read them — never write — so the feature is strictly read-only and
