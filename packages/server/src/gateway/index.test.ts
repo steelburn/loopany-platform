@@ -7,6 +7,7 @@ let tmp: string;
 let db: typeof import("../db/index.js");
 let store: typeof import("../db/store.js");
 let gatewayMod: typeof import("./index.js");
+let cliMod: typeof import("./cli.js");
 let tokens: typeof import("./tokens.js");
 let notifyMod: typeof import("./notify.js");
 
@@ -22,6 +23,7 @@ beforeAll(async () => {
   await db.runMigrations();
   store = await import("../db/store.js");
   gatewayMod = await import("./index.js");
+  cliMod = await import("./cli.js");
   tokens = await import("./tokens.js");
   notifyMod = await import("./notify.js");
 });
@@ -34,10 +36,14 @@ beforeEach(async () => {
   await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
-function gateway(
-  notify?: (loop: any, message: string) => Promise<void>,
-): InstanceType<typeof gatewayMod.MachineGateway> {
-  return new gatewayMod.MachineGateway(
+/** The core gateway MERGED with the CLI verb surface (`agentApi`/`cli` moved to
+ *  `CliGateway`, constructed over the same instance - mirroring boot), so every
+ *  existing call site keeps working without weakening a single assertion. */
+type TestGateway = InstanceType<typeof gatewayMod.MachineGateway> &
+  Pick<InstanceType<typeof cliMod.CliGateway>, "agentApi" | "cli">;
+
+function gateway(notify?: (loop: any, message: string) => Promise<void>): TestGateway {
+  const core = new gatewayMod.MachineGateway(
     {
       maybeFlagEvolve(): void {},
       finishEvolution(): void {},
@@ -49,6 +55,11 @@ function gateway(
     undefined, // default in-memory blobstore
     notify,
   );
+  const cli = new cliMod.CliGateway(core);
+  return Object.assign(core, {
+    agentApi: cli.agentApi.bind(cli),
+    cli: cli.cli.bind(cli),
+  });
 }
 
 /** A recording notifier: captures (loopId, message) instead of pushing to a channel. */

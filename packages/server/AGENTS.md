@@ -159,7 +159,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## axi-conformance CLI (batch 6 — daemon text sink + content-first home)
 
-- **Server `home` verb** (`gateway/index.ts`): bare `loopany` posts `["home", …ctx]`.
+- **Server `home` verb** (`gateway/cli.ts`): bare `loopany` posts `["home", …ctx]`.
   DEVICE branch (`homeDevice`) is handled in `deviceCli` BEFORE the unknown-machine 401
   guard, so an unregistered machine renders the DEFINITIVE `machine: not connected — run
   \`loopany up\`` state (never a 401/empty, P5/P8). A registered machine → `machinePresence`
@@ -173,7 +173,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   replicates the daemon's `resolveLoopDir` (dirname(taskFile)→workdir, tilde-expanded
   against the passed `--home` since the SERVER's home is irrelevant) to split loops into
   "here" vs an `elsewhere` count; no cwd (or none matching) ⇒ ALL loops are "here". This
-  is the one place `gateway/index.ts` imports `node:path` (pure, no I/O).
+  is the one place `gateway/cli.ts` imports `node:path` (pure, no I/O).
 - **Daemon is a text sink** (`packages/daemon/src`): every server-verb path PRINTS
   `body.text`+`body.exitCode` via the shared `cli-client.ts`. Batch 6 had `printText`
   return null on a text-less OLD server for a one-release structured fallback; **batch 7
@@ -339,23 +339,43 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   folder must be watched before it writes); gateway `createLoop`/`editLoop` call
   `invalidateWatch`; store-direct write paths (web loopApi) are covered by the TTL.
 
-## Gateway layout (`gateway/sync.ts` - the ArtifactSync split)
+## Gateway layout (the MachineGateway decomposition)
 
+- `gateway/index.ts` (`MachineGateway`) is the run-lifecycle core: poll/pollWait,
+  report/reclaimRun/sweep, `finishLoop`, `maintainStorage` (retention/GC), the
+  owner verbs (createLoop/listLoops/editLoop/loopLog/renderLoopLog), and the
+  presence/watch state.
 - The artifact byte-ingress cluster lives in `gateway/sync.ts` as `ArtifactSync`:
   `sync()` (POST /api/machine/sync manifest reconcile), `putBlob()` (PUT
   /api/machine/blob/:hash), `readBlob()` (the download seam `artifactFiles.ts` /
   `runDiff.ts` resolve bytes through), plus the private task-file mirror
-  `refreshTaskFileContent`. `MachineGateway` (`gateway/index.ts`) keeps everything
-  else: poll/pollWait, report/reclaimRun/sweep, the CLI cluster, owner verbs, and
-  `maintainStorage` (retention/GC).
-- **Boot constructs ONE `createBlobStore()` and hands the SAME instance to both
-  classes** (`boot.ts`; accessors `getGateway()` / `getArtifactSync()`). This is
-  load-bearing with the in-memory store: two instances would mean retention/GC
-  deleting bytes ArtifactSync never wrote (and vice versa). Tests mirror the
-  sharing (`retention.test.ts` `gatewayWithStore`).
-- `sync.ts` imports the shared wire helpers from `index.ts` (`clipText`, `nowIso`,
-  `WIRE_TEXT_CAP`, `HttpResult`) - one clipping/NUL-stripping discipline, no fork;
-  `index.ts` never imports `sync.ts`, so there is no cycle.
+  `refreshTaskFileContent`.
+- The CLI dispatch cluster lives in `gateway/cli.ts` as `CliGateway`
+  (constructor-injected with the `MachineGateway`): `cli()` (the unified
+  /api/machine/cli credential router + `finalizeCli`), `agentApi()`
+  (/agent-api/loop), the per-run `dispatch()` verb switch, and the CLI-only
+  renders/help/home. It reuses the core's methods through the injected gateway -
+  `finishLoop`, `renderLoopLog` (the flat-404 scoping body), the owner verbs, and
+  the scheduler are public on `MachineGateway` for exactly that second consumer -
+  so floors/allowControl/canFinish and the credential-type-first routing flow
+  through unchanged. `gateway/toon.ts` stays the shared render spine.
+- `gateway/validate.ts` holds the ui/workflow/schema validators. ANTI-DRIFT
+  INVARIANT: the owner edit surface (`createLoop`/`editLoop` in index.ts) and the
+  run-token `set-*` surface (`applySet*` in cli.ts) import this ONE module, so the
+  two write paths cannot validate differently.
+- **Boot constructs ONE `createBlobStore()` and hands the SAME instance to
+  `MachineGateway` and `ArtifactSync`** (`boot.ts`; accessors `getGateway()` /
+  `getArtifactSync()` / `getCliGateway()`). This is load-bearing with the
+  in-memory store: two instances would mean retention/GC deleting bytes
+  ArtifactSync never wrote (and vice versa). Tests mirror the sharing
+  (`retention.test.ts` `gatewayWithStore`).
+- Import direction: `sync.ts` and `cli.ts` import the shared wire helpers from
+  `index.ts` (`clipText`, `nowIso`, `WIRE_TEXT_CAP`, `HttpResult`, the validators'
+  caps, ...) - one clipping/NUL-stripping discipline, no fork; `index.ts` never
+  imports `sync.ts` or `cli.ts`, so there is no cycle.
+- The legacy `/api/machine/loop` + `/api/machine/log` routes call the owner-verb
+  methods on `MachineGateway` directly; `/api/machine/cli` + `/agent-api/loop`
+  route through `getCliGateway()`.
 
 ## Maintaining this file
 
