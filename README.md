@@ -20,8 +20,9 @@ runs indefinitely) or work toward a goal (it has a finish line and closes
 itself once the goal is met).
 
 Loops also improve themselves. Loopany periodically reviews a loop's own run
-history and evolves it: sharpening the task brief, folding repeated mechanical
-work into a cheap deterministic pre-stage, refining its dashboard - so a loop
+history and evolves it: sharpening the task brief, distilling its working
+memory down to the durable learnings, folding repeated mechanical work into a
+cheap deterministic pre-stage, refining its dashboard - so a loop
 gets sharper and cheaper the longer it runs, and you spend your attention on
 the judgment calls, not the cranking.
 
