@@ -604,13 +604,20 @@ export async function setTeamMemberRoleGuarded(
 /**
  * Delete a team and its dependents, transactionally. The CALLER enforces the
  * policy guards first (personal-team undeletable; blocked while the team still
- * owns loops — design decision 1, no cascade of loop history). Here we cascade
+ * owns loops — design decision 1, no cascade of loop history). We RE-CHECK the
+ * loop count INSIDE the transaction and abort (`has-loops`) if any loop exists,
+ * closing the check-then-cascade gap where a loop created between the caller's
+ * guard and here would be orphaned at a now-deleted team. On success we cascade
  * the team's own resources: channels, pending invites, memberships, and reassign
  * every machine whose cosmetic home-team was this team back to its owner's
  * personal team (machines are user-owned; the team pointer is only a home hint).
  */
-export async function deleteTeamCascade(teamId: string): Promise<void> {
-  await db.transaction(async (tx) => {
+export async function deleteTeamCascade(teamId: string): Promise<"ok" | "has-loops"> {
+  const outcome = await db.transaction(async (tx) => {
+    const loopCount = Number(
+      (await tx.select({ n: sql<number>`count(*)` }).from(loops).where(eq(loops.teamId, teamId)))[0]?.n ?? 0,
+    );
+    if (loopCount > 0) return "has-loops" as const;
     // Reassign machine home-team pointers (cosmetic) to each machine owner's
     // personal team, so no row dangles at a deleted team.
     const homed = await tx.select().from(machines).where(eq(machines.teamId, teamId));
@@ -621,8 +628,10 @@ export async function deleteTeamCascade(teamId: string): Promise<void> {
     await tx.delete(teamInvites).where(eq(teamInvites.teamId, teamId));
     await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
     await tx.delete(teams).where(eq(teams.id, teamId));
+    return "ok" as const;
   });
-  ensuredTeams.delete(teamId);
+  if (outcome === "ok") ensuredTeams.delete(teamId);
+  return outcome;
 }
 
 // ---- team invites (short-lived, single-use membership links) ----
@@ -653,19 +662,42 @@ export async function listPendingInvites(teamId: string): Promise<TeamInvite[]> 
 }
 
 /**
- * Atomically claim a single-use invite: stamp `redeemedAt`/`redeemedByUserId`
- * ONLY if it is still unredeemed, and report whether THIS call won the claim.
- * The `redeemed_at IS NULL` guard makes the stamp the single-use chokepoint, so
- * two concurrent redeems can't both add a member. Returns false when the invite
- * was already spent (a losing race, or a stale re-redeem).
+ * Atomically redeem a single-use invite: in ONE transaction, stamp
+ * `redeemedAt`/`redeemedByUserId` ONLY if the invite is still unredeemed and,
+ * when this call won the stamp, grant the membership in the SAME transaction so
+ * the two commit together (a crash between them can't burn the link without
+ * granting membership). The `redeemed_at IS NULL` guard makes the stamp the
+ * single-use chokepoint, so two concurrent redeems can't both add a member.
+ * Pass `grant: null` for an already-member redeem (still burns the link, no
+ * double-add / no role change). Returns false when the invite was already spent
+ * (a losing race, or a stale re-redeem).
  */
-export async function markInviteRedeemedIfUnused(token: string, userId: string): Promise<boolean> {
-  const won = await db
-    .update(teamInvites)
-    .set({ redeemedAt: nowIso(), redeemedByUserId: userId })
-    .where(and(eq(teamInvites.token, token), isNull(teamInvites.redeemedAt)))
-    .returning({ token: teamInvites.token });
-  return won.length > 0;
+export async function redeemInviteAtomic(
+  token: string,
+  userId: string,
+  grant: { teamId: string; role: "owner" | "member" } | null,
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const won = await tx
+      .update(teamInvites)
+      .set({ redeemedAt: nowIso(), redeemedByUserId: userId })
+      .where(and(eq(teamInvites.token, token), isNull(teamInvites.redeemedAt)))
+      .returning({ token: teamInvites.token });
+    if (won.length === 0) return false;
+    if (grant) {
+      await tx
+        .insert(teamMembers)
+        .values({
+          id: `${grant.teamId}:${userId}`,
+          teamId: grant.teamId,
+          userId,
+          role: grant.role,
+          createdAt: nowIso(),
+        })
+        .onConflictDoNothing();
+    }
+    return true;
+  });
 }
 
 /** Revoke a pending invite (owner action). */

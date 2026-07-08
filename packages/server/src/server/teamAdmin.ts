@@ -162,6 +162,14 @@ export async function renameTeam(userId: string, teamId: string, name: string): 
   return { ok: true };
 }
 
+function blockedByLoops(loopCount: number): { ok: false; error: string } {
+  const one = loopCount === 1;
+  return {
+    ok: false,
+    error: `This team still owns ${loopCount} loop${one ? "" : "s"} — move or delete ${one ? "it" : "them"} first.`,
+  };
+}
+
 export async function deleteTeam(userId: string, teamId: string): Promise<Result> {
   const gate = await assertOwner(teamId, userId);
   if (gate) return gate;
@@ -169,15 +177,14 @@ export async function deleteTeam(userId: string, teamId: string): Promise<Result
   if (!team) return { ok: false, error: "This team no longer exists." };
   if (store.isPersonalTeam(team)) return { ok: false, error: "Your personal team can't be deleted." };
   // Decision 1: block while the team still owns loops — never silently cascade
-  // a loop's run/artifact history away.
+  // a loop's run/artifact history away. Checked here for the accurate count in
+  // the message AND re-checked inside deleteTeamCascade's transaction, so a loop
+  // created in the check-then-cascade gap can't be orphaned at a deleted team.
   const loopCount = await store.countLoopsForTeam(teamId);
-  if (loopCount > 0) {
-    return {
-      ok: false,
-      error: `This team still owns ${loopCount} loop${loopCount === 1 ? "" : "s"} — move or delete ${loopCount === 1 ? "it" : "them"} first.`,
-    };
+  if (loopCount > 0) return blockedByLoops(loopCount);
+  if ((await store.deleteTeamCascade(teamId)) === "has-loops") {
+    return blockedByLoops(await store.countLoopsForTeam(teamId));
   }
-  await store.deleteTeamCascade(teamId);
   return { ok: true };
 }
 
@@ -306,13 +313,18 @@ export async function redeemInvite(
   const team = await store.getTeam(invite.teamId);
   if (!team) return { ok: false, error: "The team for this invite no longer exists." };
   const already = !!(await store.getTeamMember(invite.teamId, userId));
-  // Claim the single-use link ATOMICALLY before granting membership: the
+  // Claim the single-use link and grant membership in ONE transaction: the
   // conditional stamp (`redeemed_at IS NULL`) is the chokepoint, so two
-  // concurrent redeems can't both add a member off one link. Only the winner
-  // adds membership; a loser sees the invite already spent. An already-member
-  // redeem still burns the link (so it can't later add someone else).
-  const won = await store.markInviteRedeemedIfUnused(token, userId);
+  // concurrent redeems can't both add a member off one link, and the stamp +
+  // membership add commit together (a crash between them can't burn the link
+  // without granting membership). Only the winner adds membership; a loser sees
+  // the invite already spent. An already-member redeem still burns the link (so
+  // it can't later add someone else) with no double-add / no role change.
+  const won = await store.redeemInviteAtomic(
+    token,
+    userId,
+    already ? null : { teamId: invite.teamId, role: invite.role },
+  );
   if (!won) return { ok: false, error: "This invite link has already been used." };
-  if (!already) await store.addTeamMember(invite.teamId, userId, invite.role);
   return { ok: true, teamId: invite.teamId, teamName: team.name, alreadyMember: already };
 }
