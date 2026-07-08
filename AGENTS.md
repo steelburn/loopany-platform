@@ -159,7 +159,7 @@ computes pure functions. Run instructions: `README.md`.
   `listTemplates` returns it. Drop a new folder; the registry test (a non-empty
   `desc`/`description` per entry) covers it automatically.
 - **Dashboard entry**: the template cards render directly beside "New Loop"
-  (`routes/index.tsx`, `templates.map`). One click opens `ComposeModal` with that
+  (`components/DashboardView.tsx`, `templates.map`). One click opens `ComposeModal` with that
   `template` - it skips the host chooser, goes straight to the snippet, and appends the
   template's `description` under the config lines. `ComposeModal` handles BOTH blank
   loops (`template = null`, the two-step rail) and templates (`template` set) - there is
