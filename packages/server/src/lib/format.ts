@@ -3,7 +3,7 @@
  * self-contained UI page (src/scheduler/ui.ts). The six status colors encode
  * meaning and are reused by the timeline, chart, and A/B panel.
  */
-import type { JobSummary, RunSummary, TranscriptStep } from '../types'
+import type { JobSummary, RunSummary } from '../types'
 
 export const fmt = (t: string | null | undefined): string =>
   t ? new Date(t).toLocaleString() : '—'
@@ -153,20 +153,6 @@ export function dotLabel(r: RunSummary): string {
   // Prefer the run's status (No update / New / Resolved …); otherwise map the
   // delivery outcome to a human label so internal enums never reach the UI.
   return lookup(r.status)?.label ?? OUTCOME_LABEL[r.outcome] ?? titleCase(r.outcome)
-}
-
-/** Transcript steps → a flat text trace (tool `▸`, result `↳`, plain text).
- *  Shared by the run-detail view and the edit-watch panel. */
-export function formatTranscript(steps: TranscriptStep[]): string {
-  return steps
-    .map((s) =>
-      s.kind === 'tool'
-        ? `▸ ${s.name}  ${s.input ?? ''}`
-        : s.kind === 'result'
-          ? `   ↳ ${s.text ?? ''}`
-          : (s.text ?? ''),
-    )
-    .join('\n\n')
 }
 
 export const lastRunOf = (j: JobSummary): RunSummary | null => {
