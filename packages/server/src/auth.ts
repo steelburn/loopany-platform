@@ -149,17 +149,29 @@ export async function requestScope(): Promise<RequestScope> {
 }
 
 /**
- * Whether a loop (by its owning team) is visible/actionable in the given request
- * scope. The single source for loop authorization: open mode sees everything,
- * an admin's "All teams" view sees everything, otherwise the loop must belong to
- * the active team. Shared by the server fns (`ownedLoop`) and the artifact
- * download route so the gate can't drift between them.
+ * Whether the request may view/act on a loop, by its owning team. The single
+ * source for loop authorization, shared by the server fns (`ownedLoop`) and the
+ * artifact download route so the gate can't drift between them.
+ *
+ * Authorization is by MEMBERSHIP in the loop's own team — NOT by the loop merely
+ * matching the caller's active team. A user who belongs to team B can open a
+ * direct link to a team-B loop while their active team is A, instead of getting a
+ * spurious "not found" (the cross-team-link bug). Rules:
+ *  - open mode ⇒ the single shared workspace, everything visible;
+ *  - a superadmin ⇒ cross-team visibility (any team's loop);
+ *  - the active team is a no-DB fast path (requestScope already membership-
+ *    validated the active-team cookie);
+ *  - otherwise the user must be a MEMBER of the loop's team.
+ * Async because the membership fall-through is a store lookup. A non-member (and a
+ * signed-out request) is denied, indistinguishable from a nonexistent loop.
  */
-export function loopInScope(loopTeamId: string | null, scope: RequestScope): boolean {
-  const { enforce, teamId, isAdmin, allTeams } = scope;
-  if (!enforce) return true;
-  if (isAdmin && allTeams) return true;
-  return loopTeamId === teamId;
+export async function canAccessLoop(loopTeamId: string | null, scope: RequestScope): Promise<boolean> {
+  const { enforce, teamId, userId, isAdmin } = scope;
+  if (!enforce) return true; // open mode: no gate
+  if (isAdmin) return true; // superadmin sees every team
+  if (loopTeamId === teamId) return true; // active team (already validated by requestScope)
+  if (!loopTeamId || !userId) return false;
+  return store.isTeamMember(loopTeamId, userId); // membership in the loop's own team
 }
 
 export const auth = betterAuth({

@@ -166,7 +166,9 @@ schema/driver base).
 - `artifactFiles.ts`: flip `listLoopArtifacts` sync → async.
 - routes: mechanical `const r = await getGateway().X(...)` + `await getGateway()`.
 - `auth.ts`: `drizzleAdapter(db, { provider: 'pg' })`; await the store calls inside the
-  already-async hooks; keep `teamIdForUser`/`loopInScope` sync (pure).
+  already-async hooks; keep `teamIdForUser` sync (pure). (`loopInScope` was later
+  renamed to the async `canAccessLoop`, which authorizes by team membership via a
+  store lookup — no longer sync/pure.)
 - `main.ts`: await all store calls; `listLoops().map(...lastRun)` → `Promise.all`.
 - Depends on adapters + boot, so land after Batch 4; disjoint from Batch 5's files.
 
