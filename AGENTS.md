@@ -667,8 +667,10 @@ computes pure functions. Run instructions: `README.md`.
 - **The dashboard is a DEFAULT responsive grid** (`.loopview` in `styles/app.css`,
   `auto-fit minmax(min(100%,22rem),1fr)`): independent top-level panels tile side by
   side on desktop (calendar left, document right) and stack when narrow; headings/
-  prose/`hr` span full width so only block panels tile. A single panel fills the row
-  (no regression). `LoopView` dropped `space-y-*` so the grid gap owns spacing.
+  prose/`hr`/`section` AND content blocks (`ul`/`ol`/`table`/`pre`/`blockquote`/
+  `figure`/`img`) all span full width, so ONLY the custom `loop-*` panels + their
+  explicit `div` wrappers tile. A single panel fills the row (no regression).
+  `LoopView` dropped `space-y-*` so the grid gap owns spacing.
 
 ## CI/CD (`.github/workflows/`)
 
