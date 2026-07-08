@@ -315,11 +315,17 @@ export interface CapResult {
  * 413/timeout; the sync degrades gracefully instead of hot-retrying a doomed giant
  * forever. Selection is depth-then-size-then-path deterministic, so the SAME files
  * stay dropped across flushes (no add/delete churn).
+ *
+ * Oversize entries (`oversize`, size > BLOB_CAP) sync as metadata only and transfer
+ * zero bytes, so they are EXEMPT from the byte cap (never counted toward
+ * total/kept bytes, never dropped by the byte check) while still counting toward the
+ * file-count cap — a loop holding one legitimate huge artifact is not falsely flagged
+ * as scratch-workspace misuse, but a genuine file-count flood still trips.
  */
 export function capManifest(entries: ManifestEntry[], maxFiles = MAX_SYNC_FILES, maxBytes = MAX_SYNC_BYTES): CapResult {
   const totalFiles = entries.length;
   let totalBytes = 0;
-  for (const e of entries) totalBytes += e.size;
+  for (const e of entries) if (!e.oversize) totalBytes += e.size;
   if (totalFiles <= maxFiles && totalBytes <= maxBytes) {
     return { kept: entries, breached: false, totalFiles, totalBytes, keptBytes: totalBytes, droppedFiles: 0 };
   }
@@ -335,9 +341,9 @@ export function capManifest(entries: ManifestEntry[], maxFiles = MAX_SYNC_FILES,
   let keptBytes = 0;
   for (const e of ordered) {
     if (kept.length >= maxFiles) break;
-    if (keptBytes + e.size > maxBytes) continue; // skip this one; a smaller later file may still fit
+    if (!e.oversize && keptBytes + e.size > maxBytes) continue; // skip this one; a smaller later file may still fit
     kept.push(e);
-    keptBytes += e.size;
+    if (!e.oversize) keptBytes += e.size;
   }
   return { kept, breached: true, totalFiles, totalBytes, keptBytes, droppedFiles: totalFiles - kept.length };
 }

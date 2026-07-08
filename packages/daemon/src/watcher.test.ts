@@ -161,6 +161,7 @@ describe("buildManifest — incremental stat cache", () => {
 
 describe("capManifest — per-loop sync caps", () => {
   const entry = (p: string, size: number) => ({ path: p, hash: sha256(Buffer.from(p)), size, binary: false, oversize: false });
+  const oversize = (p: string, size: number) => ({ path: p, hash: null, size, binary: false, oversize: true });
 
   test("under both caps the manifest is returned untouched (zero-cost common case)", () => {
     const entries = [entry("a", 10), entry("b", 20)];
@@ -194,6 +195,24 @@ describe("capManifest — per-loop sync caps", () => {
     const r = capManifest([entry("report.md", 200), ...flood], 3, 1_000_000);
     expect(r.breached).toBe(true);
     expect(r.kept.map((e) => e.path)).toContain("report.md");
+  });
+
+  test("an oversize (metadata-only) entry is byte-cap-exempt but still counts toward the file-count cap", () => {
+    // A single legitimate huge artifact (500MB) syncs as metadata only — zero bytes
+    // transferred — so it must NOT trip the byte cap alongside normal small content.
+    const entries = [oversize("big.zip", 500 * 1024 * 1024), entry("report.md", 100), entry("state.json", 200)];
+    const r = capManifest(entries, 100, 1000); // 1000-byte budget, well under 500MB
+    expect(r.breached).toBe(false);
+    expect(r.kept).toBe(entries); // untouched — byte tally excludes the oversize entry
+    expect(r.totalBytes).toBe(300);
+
+    // ...but a genuine file-count flood still trips even when the overflow is oversize.
+    const flood = Array.from({ length: 20 }, (_, i) => oversize(`checkout/f${i}.zip`, 500 * 1024 * 1024));
+    const capped = capManifest([entry("report.md", 100), ...flood], 3, 1_000_000);
+    expect(capped.breached).toBe(true);
+    expect(capped.kept.map((e) => e.path)).toContain("report.md");
+    expect(capped.kept).toHaveLength(3);
+    expect(capped.keptBytes).toBe(100); // oversize kept entries add nothing to keptBytes
   });
 
   test("selection is deterministic across calls (same files stay dropped — no add/delete churn between flushes)", () => {
