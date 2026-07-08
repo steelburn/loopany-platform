@@ -379,6 +379,52 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   methods on `MachineGateway` directly; `/api/machine/cli` + `/agent-api/loop`
   route through `getCliGateway()`.
 
+## Team CRUD + membership management
+
+- **Logic lives in `server/teamAdmin.ts`; `server/teamFns.ts` is a THIN RPC wrapper.**
+  teamAdmin is framework-free (plain async fns over `store`, `(actorUserId, ...)` in),
+  so every rule is directly testable against real pglite without mocking the Start
+  runtime (`server/teamCrud.integration.test.ts`, 15 scenarios). teamFns resolves the
+  signed-in user (`currentUserId`) and delegates; team management is GATED (open mode /
+  signed-out ⇒ a uniform "sign-in required").
+- **Every fn takes an EXPLICIT teamId and authorizes by membership+role, NEVER the
+  active-team cookie** (the URL report's hard lesson — managing team B while browsing A
+  must work). `assertOwner` is the single owner-gate chokepoint; a non-member gets the
+  enumeration-safe generic not-found, never the owner-only message.
+- **The six approved design decisions (`data/teamcrud-design/report.md` §7):**
+  (1) delete is BLOCKED while the team owns loops (`store.listLoops(teamId).length`),
+  never cascaded — `store.deleteTeamCascade` only removes channels/invites/members and
+  reassigns machine home-team pointers (cosmetic, machines are user-owned) to each
+  owner's personal team; (2) invites are BOTH direct-add-by-email (existing account
+  fast path) AND a single-use, 7-day invite link (`team_invites` table, migration
+  `0002`); (3) an invite never bypasses `LOOPANY_ALLOWED_LOGINS` (the redeemer already
+  signed in through the gate); (4) team management is owner-only, loop creation stays
+  any-member; (5) the personal team is renamable — **`store.ensureTeam` is now
+  INSERT-ONLY for the name** (the old force-rename at every requestScope silently
+  reverted manual renames); (6) multi-owner allowed, the ONLY invariant is the
+  last-owner guard.
+- **The last-owner guard is enforced TRANSACTIONALLY in the store**
+  (`removeTeamMemberGuarded` / `setTeamMemberRoleGuarded` count owners + mutate in ONE
+  txn → `'ok'|'last-owner'|'not-member'`), so two concurrent self-removals can't both
+  win and strand a memberless team. `leaveTeam` reuses `removeTeamMemberGuarded` (self)
+  and also blocks the personal team.
+- **Invite redeem** (`/invite/$token` route → `redeemTeamInvite`): any signed-in user
+  may redeem (the token is the authority). Outcomes: invalid / already-used (single-use,
+  stamped `redeemedAt`) / expired / already-member (success, no double-add, still burns
+  the link) / fresh join at the invite's role. The route forges nothing — a signed-out
+  visitor hits the normal gated `SignIn` with `callbackURL` back to the invite.
+- **UI**: `components/TeamsModal.tsx` (header "Teams" button in `DashboardView`, shown
+  only when the user has teams). Master list + selected-team detail (rename, members
+  with role select + remove, add-by-email, invite links + revoke, leave, delete with the
+  blocked-by-loops disabled state). Owner-only controls hide for a plain member; the
+  server re-authorizes regardless.
+- **Verifying the gated flow in a browser without GitHub OAuth**: seed a `user` + a
+  `session` row into a temp-`LOOPANY_DATA_DIR` pglite, then forge the cookie
+  `better-auth.session_token=<token>.<makeSignature(token, secret)>` (`makeSignature`
+  from `better-auth/crypto`) — Better Auth verifies the HMAC signature regardless of
+  cookie domain. pglite is single-writer, so seed in a separate process that exits
+  before the dev server opens the same dir.
+
 ## Maintaining this file
 
 Keep entries durable and project-intrinsic (build/test/release, architecture, sharp
