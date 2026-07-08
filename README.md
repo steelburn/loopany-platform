@@ -170,6 +170,17 @@ docker run -p 3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... loopany
 Pass configuration with `-e KEY=value` or `--env-file` (same variables as
 [`.env.example`](.env.example)).
 
+### Teams
+
+With sign-in on, the dashboard's *Teams* button manages membership: create,
+rename, or delete a team (delete is blocked while it still owns loops), set each
+member's role (owner or member), and add teammates by email or via a single-use,
+7-day invite link (`/invite/<token>`). Team management is owner-only; any member
+can still create loops. Invites never widen who can sign in - the redeemer must
+already have made it through `LOOPANY_ALLOWED_LOGINS`. Everyone gets a personal
+team that can't be deleted or left, only renamed. Open mode (no sign-in) hides
+this entirely.
+
 ### Notifications
 
 Push channels are configured per team in the dashboard (the *Notifications*

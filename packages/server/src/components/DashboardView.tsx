@@ -9,6 +9,7 @@ import { LoopCard } from './LoopCard'
 import { TeamSwitcher } from './TeamSwitcher'
 import { MachinesModal } from './MachinesModal'
 import { NotificationsModal } from './NotificationsModal'
+import { TeamsModal } from './TeamsModal'
 import { ComposeModal } from './ComposeModal'
 import { LoopLogo } from './LoopLogo'
 
@@ -65,6 +66,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
   })
   const [machinesOpen, setMachinesOpen] = useState(false)
   const [notifyOpen, setNotifyOpen] = useState(false)
+  const [teamsOpen, setTeamsOpen] = useState(false)
 
   // Silent background refresh — fetch-then-set (like the detail pages), NOT
   // router.invalidate: invalidate re-runs the loader, whose Promise.all THROWS
@@ -86,7 +88,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
   // while any loop is executing so its run block + Running badge surface (and
   // settle into a finished block) without a manual refresh.
   const openRef = useRef(false)
-  openRef.current = compose.open || machinesOpen || notifyOpen
+  openRef.current = compose.open || machinesOpen || notifyOpen || teamsOpen
   const anyRunning = jobs.some((j) => j.running)
   useEffect(() => {
     const t = setInterval(
@@ -119,6 +121,13 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
           <span className="text-[18px] font-semibold tracking-[-0.015em] text-display">Loopany</span>
           <TeamSwitcher data={teams} />
           <div className="flex-1" />
+          {/* Team management is a gated feature (real identities) — the button
+              shows only when the user actually has teams (gate on). */}
+          {teams && teams.teams.length > 0 && (
+            <button onClick={() => setTeamsOpen(true)} className={headerBtn}>
+              Teams
+            </button>
+          )}
           <button onClick={() => setNotifyOpen(true)} className={headerBtn}>
             Notifications
           </button>
@@ -205,6 +214,8 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
       <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} teamId={teamId} />
 
       <NotificationsModal open={notifyOpen} onClose={() => setNotifyOpen(false)} />
+
+      <TeamsModal open={teamsOpen} onClose={() => setTeamsOpen(false)} activeTeamId={teamId} />
     </Tooltip.Provider>
   )
 }

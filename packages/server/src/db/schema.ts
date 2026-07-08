@@ -349,6 +349,38 @@ export const teamMembers = pgTable(
   (t) => [index("team_members_team_idx").on(t.teamId), index("team_members_user_idx").on(t.userId)],
 );
 
+// ---- team_invites: a short-lived, single-use link a signed-in recipient redeems ----
+//
+// The owner-initiated invite mechanism (design §4, decision 2, "invite-link"): an
+// owner mints a token, shares the `/invite/<token>` link over their own channel,
+// and a signed-in recipient redeems it into membership. Single-use (`redeemedAt`
+// stamps it spent), short TTL (`expiresAt`), and the granted `role` is baked in
+// (capped at the inviter's role at mint time). The token is stored plaintext as
+// the primary key — same trust model as `machines.token`/`connect_keys` (a
+// self-hosted small-team tool whose DB is already the trust root); the link only
+// grants membership WITHIN the app and never bypasses the login allowlist
+// (decision 3 — the redeemer must already have signed in through the gate).
+export const teamInvites = pgTable(
+  "team_invites",
+  {
+    /** The wire token the recipient presents (`/invite/<token>`). */
+    token: text("token").primaryKey(),
+    teamId: text("team_id").notNull(),
+    /** Role granted on redeem (capped at the inviter's role at mint time). */
+    role: text("role", { enum: ["owner", "member"] }).notNull().default("member"),
+    /** The owner who minted the invite (attribution). */
+    invitedByUserId: text("invited_by_user_id").notNull(),
+    /** When the invite lapses (ISO). A redeem past this is refused. */
+    expiresAt: text("expires_at").notNull(),
+    /** Single-use stamp: set on redeem so the same link can't be reused. */
+    redeemedAt: text("redeemed_at"),
+    /** The user who redeemed it (attribution). */
+    redeemedByUserId: text("redeemed_by_user_id"),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("team_invites_team_idx").on(t.teamId)],
+);
+
 // ---- notification channels: per-team push targets a loop can route to ----
 
 export const notificationChannels = pgTable(
@@ -472,6 +504,8 @@ export type Team = typeof teams.$inferSelect;
 export type NewTeam = typeof teams.$inferInsert;
 export type TeamMember = typeof teamMembers.$inferSelect;
 export type NewTeamMember = typeof teamMembers.$inferInsert;
+export type TeamInvite = typeof teamInvites.$inferSelect;
+export type NewTeamInvite = typeof teamInvites.$inferInsert;
 export type NotificationChannel = typeof notificationChannels.$inferSelect;
 export type NewNotificationChannel = typeof notificationChannels.$inferInsert;
 export type Blob = typeof blobs.$inferSelect;
@@ -484,7 +518,7 @@ export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type ConnectKeyRow = typeof connectKeys.$inferSelect;
 
 /** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, connectKeys };
+export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, connectKeys };
 
 // Keep a default no-op SQL reference so `sql` import isn't flagged before use.
 export const _schemaVersion = sql`1`;
