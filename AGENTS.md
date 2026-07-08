@@ -15,10 +15,13 @@ computes pure functions. Run instructions: `README.md`.
   Drizzle over Postgres (tiered driver: embedded pglite when `DATABASE_URL` is
   unset, postgres-js on Supabase when set).
   - `src/scheduler/` - cron engine (tick -> pending run -> Dispatcher).
-  - `src/gateway/` - machine gateway (`index.ts`: poll/agent-api/report/CLI +
-    retention/GC; `sync.ts`: `ArtifactSync`, the sync/blob byte ingress - boot
-    shares ONE blob store between both), run tokens, delivery, prompt, notify,
-    blobstore (R2/in-memory), artifacts.
+  - `src/gateway/` - machine gateway (`index.ts`: `MachineGateway`, the
+    poll/report run-lifecycle core + owner verbs + retention/GC; `cli.ts`:
+    `CliGateway`, the credential-keyed CLI dispatch for /api/machine/cli +
+    /agent-api/loop; `validate.ts`: the ONE ui/workflow/schema validator module
+    both write surfaces import; `sync.ts`: `ArtifactSync`, the sync/blob byte
+    ingress - boot shares ONE blob store between the classes), run tokens,
+    delivery, prompt, notify, blobstore (R2/in-memory), artifacts.
   - `src/db/` - Drizzle schema
     (machines/loops/runs/blobs/artifact_files/run_snapshots/run_leases/connect_keys)
     + store + auth-schema.
@@ -294,7 +297,8 @@ computes pure functions. Run instructions: `README.md`.
 - The device token fully impersonates the machine; it is serialized OWNER-ONLY
   (`tokenVisibleTo`) - teammates/admins get `token: null`. `loopLog` (`loopany log`
   backend) is scoped to loops bound to that machine; cross-scope = flat 404.
-- **Unified CLI dispatch `POST /api/machine/cli`** (`gateway.cli(token, argv)`) is a
+- **Unified CLI dispatch `POST /api/machine/cli`** (`gateway/cli.ts`
+  `CliGateway.cli(token, argv)`, over the injected core `MachineGateway`) is a
   ROUTER in front of the existing gateway logic, keying authority on CREDENTIAL TYPE
   first: a `dk_`-prefixed **device** token → owner verbs (`new`→createLoop,
   `loops`→listLoops, `edit`→editLoop, `log`→loopLog, `show`→describe, `home`→homeDevice —

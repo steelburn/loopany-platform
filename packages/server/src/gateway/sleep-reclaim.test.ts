@@ -20,6 +20,7 @@ let tmp: string;
 let db: typeof import("../db/index.js");
 let store: typeof import("../db/store.js");
 let gatewayMod: typeof import("./index.js");
+let cliMod: typeof import("./cli.js");
 let tokens: typeof import("./tokens.js");
 
 beforeAll(async () => {
@@ -31,6 +32,7 @@ beforeAll(async () => {
   await db.runMigrations();
   store = await import("../db/store.js");
   gatewayMod = await import("./index.js");
+  cliMod = await import("./cli.js");
   tokens = await import("./tokens.js");
 });
 
@@ -206,7 +208,8 @@ test("agent-api verbs are refused for a reclaimed run (only the final report rec
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
   (await gw.sweep());
-  const out = (await gw.agentApi(rt, ["reschedule", "1h"]));
+  // The CLI verbs live on CliGateway (over the same core instance, like boot).
+  const out = (await new cliMod.CliGateway(gw).agentApi(rt, ["reschedule", "1h"]));
   expect(out.status).toBe(409);
   expect(String((out.body as any).text)).toMatch(/reclaimed/i);
 });

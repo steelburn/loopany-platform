@@ -10,6 +10,7 @@ import { runMigrations, closeClient } from "../db/index.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
 import { ArtifactSync } from "../gateway/sync.js";
+import { CliGateway } from "../gateway/cli.js";
 import { createBlobStore } from "../gateway/blobstore.js";
 import { gcIntervalMs } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
@@ -18,6 +19,7 @@ interface Booted {
   scheduler: Scheduler;
   gateway: MachineGateway;
   artifactSync: ArtifactSync;
+  cliGateway: CliGateway;
   abort: AbortController;
 }
 
@@ -57,6 +59,9 @@ async function boot(): Promise<Booted> {
   const blobStore = createBlobStore();
   gateway = new MachineGateway(scheduler, blobStore);
   const artifactSync = new ArtifactSync(blobStore);
+  // CLI verb dispatch (unified /api/machine/cli + legacy /agent-api/loop) over
+  // the same core gateway instance.
+  const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);
 
@@ -83,7 +88,7 @@ async function boot(): Promise<Booted> {
   abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
 
   logger.info("loopany server booted");
-  return { scheduler, gateway, artifactSync, abort };
+  return { scheduler, gateway, artifactSync, cliGateway, abort };
 }
 
 export async function getScheduler(): Promise<Scheduler> {
@@ -96,4 +101,8 @@ export async function getGateway(): Promise<MachineGateway> {
 
 export async function getArtifactSync(): Promise<ArtifactSync> {
   return (await ensureServer()).artifactSync;
+}
+
+export async function getCliGateway(): Promise<CliGateway> {
+  return (await ensureServer()).cliGateway;
 }

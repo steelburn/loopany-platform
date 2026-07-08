@@ -21,7 +21,7 @@ import { machineIdFromToken, sha256 } from "./gateway/tokens.js";
 const log = logger.child({ mod: "main" });
 const DEMO_USER = "demo-user";
 
-const { gateway, scheduler, abort } = await ensureServer();
+const { gateway, cliGateway, scheduler, abort } = await ensureServer();
 
 function bearer(req: http.IncomingMessage): string | undefined {
   const h = req.headers["authorization"];
@@ -77,7 +77,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     const tok = bearer(req);
     if (!tok) return send(res, 401, { text: "loopany: missing token", exitCode: 1 });
     const b = await json(req);
-    const r = await gateway.agentApi(tok, Array.isArray(b.argv) ? b.argv : []);
+    const r = await cliGateway.agentApi(tok, Array.isArray(b.argv) ? b.argv : []);
     return send(res, r.status, r.body);
   }
   if (m === "POST" && p === "/machine/report") {
