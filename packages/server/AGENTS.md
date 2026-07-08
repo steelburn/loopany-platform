@@ -392,7 +392,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   must work). `assertOwner` is the single owner-gate chokepoint; a non-member gets the
   enumeration-safe generic not-found, never the owner-only message.
 - **The six approved design decisions (`data/teamcrud-design/report.md` §7):**
-  (1) delete is BLOCKED while the team owns loops (`store.listLoops(teamId).length`),
+  (1) delete is BLOCKED while the team owns loops (`store.countLoopsForTeam(teamId)`),
   never cascaded — `store.deleteTeamCascade` only removes channels/invites/members and
   reassigns machine home-team pointers (cosmetic, machines are user-owned) to each
   owner's personal team; (2) invites are BOTH direct-add-by-email (existing account
