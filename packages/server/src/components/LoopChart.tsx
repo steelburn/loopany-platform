@@ -172,7 +172,7 @@ export function LoopChart({
               {yAxis}
               {tooltip}
               {plotted.map((s, idx) => (
-                <Line {...seriesProps(s, idx)} key={s.field.key} />
+                <Line key={s.field.key} {...seriesProps(s, idx)} />
               ))}
             </LineChart>
           )}
