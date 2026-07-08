@@ -487,3 +487,108 @@
 @media (prefers-reduced-motion: reduce) {
   .ring-logo-animated .ring-cell { animation: none; }
 }
+
+/* ─── LoopFlow — template-modal workflow diagram (components/LoopFlow.tsx) ─────
+ * Absolutely-positioned HTML step nodes over an SVG wire layer; a token rides
+ * the wire and lights each step in turn. Colours ride the theme vars so it
+ * follows light/dark for free. The .active/.visited classes are toggled
+ * imperatively by the rAF loop (not React), so they live here to survive the
+ * DOM writes — same reason the ring-logo chase classes sit in this file. Nodes
+ * are opaque (never a translucent tint) so the wire/comet behind can't ghost
+ * through the box. */
+.lpf-node {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 0 11px;
+  border: 1px solid var(--color-wire);
+  border-radius: 11px;
+  background: var(--color-surface);
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s;
+}
+.lpf-node.tick {
+  border-color: color-mix(in srgb, var(--color-interactive) 45%, var(--color-wire));
+  background: color-mix(in srgb, var(--color-interactive) 7%, var(--color-surface));
+}
+/* The one-time setup gate — a dashed pre-node above the tick, outside the cycle. */
+.lpf-node.setup {
+  border-style: dashed;
+}
+.lpf-node.setup .lpf-k {
+  color: var(--color-warn);
+}
+/* A closed loop's finish terminus — a green end-state node + its forward exit wire. */
+.lpf-node.finish {
+  border-color: color-mix(in srgb, var(--color-success) 55%, var(--color-hairline));
+  background: color-mix(in srgb, var(--color-success) 8%, var(--color-surface));
+}
+.lpf-node.finish .lpf-k,
+.lpf-node.finish .lpf-t {
+  color: var(--color-success);
+}
+.lpf-wire.finish {
+  stroke: var(--color-success);
+}
+.lpf-node.visited {
+  border-color: color-mix(in srgb, var(--color-interactive) 40%, var(--color-wire));
+}
+.lpf-node.active {
+  border-color: var(--color-interactive);
+  box-shadow: 0 0 0 3px var(--color-interactive-soft), 0 10px 24px -12px var(--color-interactive);
+  transform: translateY(-2px);
+}
+.lpf-k {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-disabled);
+}
+.lpf-node.tick .lpf-k,
+.lpf-node.active .lpf-k {
+  color: var(--color-interactive);
+}
+.lpf-k .g {
+  font-size: 11px;
+}
+.lpf-t {
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: var(--color-display);
+}
+.lpf-node.tick .lpf-t {
+  color: var(--color-interactive);
+}
+.lpf-d {
+  font-size: 10.5px;
+  line-height: 1.28;
+  color: var(--color-secondary);
+}
+.lpf-d code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.lpf-wire {
+  stroke: color-mix(in srgb, var(--color-interactive) 55%, transparent);
+}
+.lpf-comet {
+  stroke: var(--color-interactive);
+}
+.lpf-pulse {
+  fill: var(--color-interactive);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lpf-pulse,
+  .lpf-comet {
+    display: none;
+  }
+}

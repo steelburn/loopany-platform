@@ -9,12 +9,18 @@ export function Modal({
   open,
   onClose,
   children,
+  wide = false,
 }: {
   open: boolean
   onClose: () => void
   children: ReactNode
+  /** Two-column dialogs (e.g. a template's prompt + workflow diagram) opt into a
+   *  wider shell; the default stays sized for the small compose/form dialogs. */
+  wide?: boolean
 }) {
-  const pos = 'top-[46%] -translate-y-1/2 max-w-160 max-h-[calc(100dvh-5rem)]'
+  // Small dialogs sit optically high (top-46%); the tall two-column template modal
+  // centres true so it's balanced top-and-bottom, scrolling internally if needed.
+  const pos = `-translate-y-1/2 max-h-[calc(100dvh-4rem)] ${wide ? 'top-1/2 max-w-[62rem]' : 'top-[46%] max-w-160'}`
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>

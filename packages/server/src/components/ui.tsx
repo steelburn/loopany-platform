@@ -43,6 +43,9 @@ export const btnCost = `${btnBase} border border-display bg-transparent text-dis
 // the px/text tug-of-war on CSS source-order. For inline affordances like Copy
 // that sit next to dense content rather than anchoring a dialog.
 export const btnSm = `inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-wire bg-surface px-3 py-1 text-label font-medium text-primary transition-colors duration-150 hover:bg-raised disabled:cursor-default disabled:opacity-40 ${focusRing}`
+// A prominent rounded primary pill at the standard control size (matches `btn`'s
+// px/py) in the display-ink fill - the Copy-prompt CTA in the compose modals.
+export const btnPrimaryPill = `inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-display bg-display px-4 py-2 text-body font-medium text-paper transition-colors duration-150 hover:opacity-85 disabled:cursor-default disabled:opacity-40 ${focusRing}`
 
 // A quiet borderless text button - back links, Done, dismissals.
 export const btnQuiet =
