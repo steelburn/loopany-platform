@@ -241,10 +241,15 @@
  * Agent-authored dashboard (generative UI, `LoopView`). DEFAULT layout is a
  * responsive grid so independent top-level panels sit side by side on desktop
  * (the motivating case: calendar left, rendered document right) and stack on
- * narrow viewports. `auto-fit` collapses to a single full-width column when
- * there is one panel (no regression for chart-only or single-embed dashboards);
- * `minmax(min(100%, 22rem), 1fr)` keeps a panel from overflowing a container
- * narrower than its min track. `align-items: start` stops a short panel (a
+ * narrow viewports. The layout is capped at AT MOST TWO columns: an uncapped
+ * `auto-fit` let a wide (~1180px) content area spill panels into 3+ narrow
+ * columns, squeezing a kanban's own columns and card titles. The per-track min
+ * `max(28rem, (100% - 1.25rem) / 2)` guarantees the cap: the `(100% - gap) / 2`
+ * term is never smaller than half the row, so no third track can ever fit,
+ * while `auto-fit` still collapses to ONE full-width column both when a single
+ * panel is present (no regression for chart-only / single-embed dashboards) and
+ * when the container is too narrow to hold two readable panels (~below 916px,
+ * where the 28rem floor wins). `align-items: start` stops a short panel (a
  * calendar) from stretching to a tall neighbour's (a long document) height.
  *
  * Headings, prose, AND content blocks (lists, tables, code, quotes, figures,
@@ -256,7 +261,7 @@
  */
 .loopview {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(max(28rem, (100% - 1.25rem) / 2), 1fr));
   gap: 1.25rem;
   align-items: start;
 }
