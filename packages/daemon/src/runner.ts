@@ -323,8 +323,9 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     return reportRun({ runId: d.runId, ok: false, durationMs: Date.now() - start, error: msg(err) });
   }
 
-  // 1. Workflow gate (cheap, zero-LLM). Pure result → report directly, no claude.
-  // Internal evolution passes always run Claude and may update ui/schema/workflow.
+  // 1. Workflow gate (cheap, zero-LLM). Pure result → report directly, no agent.
+  // Internal evolution passes skip this gate (they run the loop's coding agent
+  // directly) and may update ui/schema/workflow.
   let cursor: unknown;
   let escalation = "";
   let workflowFailure: { error: string; source: string } | undefined;

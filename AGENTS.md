@@ -528,9 +528,11 @@ computes pure functions. Run instructions: `README.md`.
   crafted run-only 403 reaches the agent (F3); `loopany show` out-of-run (F1) resolves the
   loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **`loopany setup hooks [--remove]`** (`setup.ts`): idempotent SessionStart hook install
-  per `SKILL_TARGET_AGENTS`. Claude Code (`~/.claude/settings.json`) and Codex
-  (`~/.codex/hooks.json`) both have concrete installers sharing ONE merge routine
-  (`installJsonSessionStartHook` — both use the identical `{hooks:{SessionStart:[...]}}`
+  per `HOOK_TARGET_AGENTS` (a SUPERSET of `SKILL_TARGET_AGENTS` - grok gets a hook but is
+  deliberately NOT a skill-install target, since it reads Claude's skills dir). Claude Code
+  (`~/.claude/settings.json`), Codex (`~/.codex/hooks.json`), and Grok Build
+  (`~/.grok/hooks/loopany.json`) all have concrete installers sharing ONE merge routine
+  (`installJsonSessionStartHook` — all use the identical `{hooks:{SessionStart:[...]}}`
   JSON shape); each writes a SessionStart command hook running the durable ABSOLUTE
   `loopany` path (our shim or a PATH global), whose stdout lands as ambient context; an
   agent with no installer is reported `skipped`. **Codex discrepancy** (verified against
@@ -539,8 +541,12 @@ computes pure functions. Run instructions: `README.md`.
   `trusted_hash = sha256:<canonical-TOML-of-normalized-identity>`, computed inside Codex).
   The installer deliberately writes ONLY the `hooks.json` entry (never synthesizes the
   version-sensitive hash, never mutates the TOML) and SURFACES the enable/trust step in the
-  report. NB: Codex is identity/skill/hook-onboarded but NOT executable — `runner.ts` always
-  spawns `claude` (`loops.agent` is recording-only). `up`/`update` call the best-effort
+  report. Grok Build's global hooks (one file per tool under `~/.grok/hooks/*.json`) are
+  ALWAYS TRUSTED - no `hooks = true` config gate and no per-hook trust hash - so writing
+  `loopany.json` makes the hook live immediately (no enable/trust note). NB: Codex is
+  identity/skill/hook-onboarded but NOT executable — `runner.ts` runs it via `claude`
+  (`loops.agent` is recording-only for `codex`; `grok` DOES execute - see the `loops.agent`
+  bullet above). `up`/`update` call the best-effort
   `refreshHooks` (never blocks). The ambient hook installs ONLY with a DURABLE on-PATH
   `loopany` (`resolveDurableCommand`: our shim OR a NON-ephemeral PATH global, returned as
   an absolute path - the transient `npx`/`_npx` PATH entry is filtered out, so it gates
@@ -665,7 +671,7 @@ computes pure functions. Run instructions: `README.md`.
   deriving the loop's on-disk dir from `job.taskFile` via `loopDir` (degrades to a
   generic instruction, never a fabricated path). Generic operation copy is
   **agent-neutral** ("your coding agent"), NOT "Claude Code" - Loopany runs more than
-  one agent (claude-code, codex, more later); the only "Claude Code"/"Codex" survivors
+  one agent (claude-code, codex, grok, more later); the only "Claude Code"/"Codex" survivors
   are the `AGENT_LABEL` chip (the loop's ACTUAL recorded agent, a factual label).
   Guarded by `loopDetailEdit.regression.test.ts`.
 - **Hard rule: no page-level horizontal scroll.** `min-w-0` on every grid/flex child;

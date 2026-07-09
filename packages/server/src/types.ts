@@ -159,8 +159,9 @@ export interface JobFull {
   ui?: string
   /** Push channel this loop notifies through (notification_channels.id). */
   channelId?: string | null
-  /** Coding agent this loop is recorded as (claude-code | codex). Read-only in the
-   *  UI; a codex loop is still executed via Claude for now (recording-only). */
+  /** Coding agent this loop is recorded as (claude-code | codex | grok). Read-only in
+   *  the UI; a grok loop is executed via the grok CLI, while a codex loop is still
+   *  executed via Claude for now (recording-only). */
   agent?: CodingAgent
   owner?: {
     gateway?: string
