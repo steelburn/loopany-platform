@@ -17,6 +17,8 @@ your team's notification channel.
 
 [Website](https://loopany.ai) · [npm](https://www.npmjs.com/package/@crewlet/loopany) · [Contributing](CONTRIBUTING.md) · [Architecture](AGENTS.md)
 
+**English | [简体中文](README.zh-CN.md)**
+
 </div>
 
 ## What is Loopany?
@@ -34,27 +36,34 @@ sync come back as a durable content home; the rest never leaves the box.
 
 A loop can stay **open** (a monitor or digest that runs indefinitely) or
 **closed** (a finish line: the loop completes itself when the goal is met).
-Loops also improve themselves - periodically reviewing their own history to
-sharpen the brief, distill working memory, fold mechanical work into a cheap
-deterministic pre-stage, and refine the dashboard.
 
-## Why "Loopany"?
+Most modern coding agents can already run on a cron or loop a task themselves.
+That is the easy 5% - the timer. The real work is the structure that lets you
+walk away while it runs. Loopany is that structure (the name nods to
+*kybernetes*, the steersman - but the product is the control plane, not the
+etymology). A bare agent loop does not give you:
 
-**Loop** + the soft cadence of *any* - loop anything, keep looping.
+- **Durable structure across runs** - state and logs so it never re-does work
+  and gets smarter over time; a verifier so there is evidence, not vibes; a
+  contract and boundary that decide whether you can safely walk away. A raw
+  cron loop has none of this by default.
+- **Self-improving (evolve)** - a periodic pass that rewrites the loop itself
+  (tighter contract, cheaper trigger, mechanical steps folded into scripts),
+  so it gets sharper and cheaper the longer it runs. A DIY loop stays as dumb
+  as day one.
+- **A team surface, not a terminal** - a shared dashboard, per-team
+  notification channels, and failure alerts. Results show up where your team
+  can see them, instead of scrolling a local terminal.
+- **BYOA + vendor-neutral** - runs on *your* machine with *your* agent and
+  credentials; not locked to one vendor's agent. Switch agents without
+  rebuilding.
+- **A safe, cheap control plane** - the server runs zero LLM and executes zero
+  code; it only schedules, stores, authenticates, and notifies. You are not
+  handing your code or secrets to a SaaS just to get scheduling.
 
-The deeper root is older. *Cybernetics* comes from Greek *kybernetes*:
-**steersman, helmsman** - the one who keeps a vessel on course by reading
-feedback and adjusting the helm. Most systems you care about (a codebase, a
-product, a team, your metrics) stay healthy the same way: small recurring
-loops. Check what changed, triage what's new, summarize, nudge whatever
-drifted. Each loop is trivial alone; together they are how a complex system
-stays under control. And they all compete for your attention - the moment you
-stop turning the crank, the system goes quiet.
-
-Loopany is the steersman for those chores. Describe the loop once; an agent on
-your own machine turns the crank on schedule - watching, digesting, acting,
-and reporting every run - so your attention stays on the judgment calls, not
-the cranking.
+Describe the loop once. The agent on your machine turns the crank on schedule -
+watching, digesting, acting, and reporting - so your attention stays on the
+judgment calls, not the cranking.
 
 ## Features
 
