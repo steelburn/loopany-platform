@@ -125,11 +125,12 @@ dashboard per loop, not a log to scroll.
 
 ## Quickstart (connect to a server)
 
-You need an account on a Loopany server (the web app) and a machine you control
-to run the loops on.
+**Hosted app:** sign in at **[https://loopany.ai](https://loopany.ai)** - or use
+your own self-hosted instance. You also need a machine you control to run the
+loops on.
 
-1. **Sign in** to the Loopany web app ([loopany.ai](https://loopany.ai) or your
-   self-hosted instance).
+1. **Sign in** to the Loopany web app at [loopany.ai](https://loopany.ai) (or
+   your self-hosted instance).
 2. **Create a loop.** The *New loop* dialog hands you a short **connect
    snippet** with a server URL and a one-time connect-key. Or start from a
    **template** - the cards beside *New loop* (like *React Doctor*) hand you
