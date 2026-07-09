@@ -96,9 +96,15 @@ describe('LoopView default grid layout', () => {
     // auto-fit collapses to one full-width column for a single panel (no
     // regression) or a narrow container; the `(100% - gap) / 2` per-track min
     // caps the grid at two columns so a wide desktop never spills 3+ narrow
-    // panels (which squeezed the kanban's own columns and card titles).
-    expect(block).toMatch(/repeat\(auto-fit,\s*minmax\(max\(/)
-    expect(block).toMatch(/\(100% - [\d.]+rem\) \/ 2/)
+    // panels (which squeezed the kanban's own columns and card titles). The
+    // outer min(100%, ...) clamp keeps a lone panel from overflowing a
+    // sub-28rem (mobile) container into an internal horizontal scroll, and the
+    // gap is a shared --loopview-gap custom property so the cap math and the
+    // actual gap can never drift.
+    expect(block).toMatch(/repeat\(auto-fit,\s*minmax\(min\(100%,\s*max\(/)
+    expect(block).toMatch(/\(100% - var\(--loopview-gap\)\) \/ 2/)
+    expect(block).toMatch(/--loopview-gap:\s*[\d.]+rem/)
+    expect(block).toMatch(/gap:\s*var\(--loopview-gap\)/)
   })
 
   it('spans headings/prose full width so only block panels tile', () => {

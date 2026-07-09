@@ -244,13 +244,19 @@
  * narrow viewports. The layout is capped at AT MOST TWO columns: an uncapped
  * `auto-fit` let a wide (~1180px) content area spill panels into 3+ narrow
  * columns, squeezing a kanban's own columns and card titles. The per-track min
- * `max(28rem, (100% - 1.25rem) / 2)` guarantees the cap: the `(100% - gap) / 2`
- * term is never smaller than half the row, so no third track can ever fit,
- * while `auto-fit` still collapses to ONE full-width column both when a single
- * panel is present (no regression for chart-only / single-embed dashboards) and
- * when the container is too narrow to hold two readable panels (~below 916px,
- * where the 28rem floor wins). `align-items: start` stops a short panel (a
- * calendar) from stretching to a tall neighbour's (a long document) height.
+ * `min(100%, max(28rem, (100% - var(--loopview-gap)) / 2))` guarantees the cap:
+ * the `(100% - gap) / 2` term is never smaller than half the row, so no third
+ * track can ever fit, while `auto-fit` still collapses to ONE full-width column
+ * both when a single panel is present (no regression for chart-only /
+ * single-embed dashboards) and when the container is too narrow to hold two
+ * readable panels (~below 916px, where the 28rem floor wins). The outer
+ * `min(100%, ...)` clamp keeps a lone panel from overflowing a container
+ * narrower than the 28rem floor (mobile/phone widths), so a single panel never
+ * forces an internal horizontal scroll. The gap is a shared `--loopview-gap`
+ * custom property used in BOTH the track formula and the `gap` declaration so
+ * the two-column cap math can never drift from the actual gap. `align-items:
+ * start` stops a short panel (a calendar) from stretching to a tall neighbour's
+ * (a long document) height.
  *
  * Headings, prose, AND content blocks (lists, tables, code, quotes, figures,
  * images) span the full width so ONLY block panels (the custom loop-* elements +
@@ -260,9 +266,10 @@
  * panel mechanism).
  */
 .loopview {
+  --loopview-gap: 1.25rem;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(max(28rem, (100% - 1.25rem) / 2), 1fr));
-  gap: 1.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(28rem, (100% - var(--loopview-gap)) / 2)), 1fr));
+  gap: var(--loopview-gap);
   align-items: start;
 }
 .loopview > h1,
