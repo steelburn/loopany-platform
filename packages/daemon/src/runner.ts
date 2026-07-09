@@ -375,16 +375,17 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   const runsDir = path.join(LOOPANY_DIR, "runs");
   const hasSystemPrompt = d.systemPrompt.trim().length > 0;
   const sysFile = hasSystemPrompt ? path.join(runsDir, `sys-${d.runId}.md`) : "";
+  // Which coding agent executes this loop. Absent on an OLD server (pre-grok) ⇒
+  // claude-code; only `grok` changes the spawn + credential set (codex still runs
+  // via claude today, so its failure reason stays "claude").
+  const agent: CodingAgent = d.loop.agent ?? "claude-code";
+  const agentLabel = agent === "grok" ? "grok" : "claude";
   try {
     if (hasSystemPrompt) {
       fs.mkdirSync(runsDir, { recursive: true });
       fs.writeFileSync(sysFile, d.systemPrompt, "utf8");
     }
 
-    // Which coding agent executes this loop. Absent on an OLD server (pre-grok) ⇒
-    // claude-code; only `grok` changes the spawn + credential set (codex still runs
-    // via claude today).
-    const agent: CodingAgent = d.loop.agent ?? "claude-code";
     const env: NodeJS.ProcessEnv = {
       ...execEnv(agent),
       // Prepend the home bin dir so `loopany` resolves to our re-exec wrapper.
@@ -425,7 +426,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       error = undefined;
       finalText = undefined;
       if (r.timedOut) {
-        error = `claude timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
+        error = `${agentLabel} timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
         // The stream captured the session id early — keep the pointer so exactly
         // the runs that need debugging (timeouts) still get the transcript/artifact
         // recovery below instead of losing their session.
@@ -446,14 +447,14 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
             subtype && subtype !== "success"
               ? subtype
               : r.code !== 0
-                ? `claude exited with code ${r.code}`
-                : "claude reported an error";
+                ? `${agentLabel} exited with code ${r.code}`
+                : `${agentLabel} reported an error`;
         }
       } else if (r.code === 0) {
         ok = true;
         sessionId = final.sessionId ?? sessionId;
       } else {
-        error = (r.stderr || r.stdout || "claude produced no output").trim().slice(0, 500);
+        error = (r.stderr || r.stdout || `${agentLabel} produced no output`).trim().slice(0, 500);
         sessionId = final.sessionId ?? sessionId;
       }
 
@@ -473,7 +474,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       if (signal?.aborted) break;
     }
   } catch (err) {
-    error = `failed to run claude: ${msg(err)}`;
+    error = `failed to run ${agentLabel}: ${msg(err)}`;
   } finally {
     if (sysFile) fs.rmSync(sysFile, { force: true }); // don't let prompt files accumulate
   }
