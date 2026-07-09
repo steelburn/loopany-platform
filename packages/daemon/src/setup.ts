@@ -7,10 +7,24 @@
  * never noise; it self-heals). `loopany up` invokes this best-effort, exactly like the
  * skill install, and it NEVER blocks/fails `up`.
  *
- * Today only Claude Code has a concrete SessionStart mechanism
- * (`~/.claude/settings.json`); other target agents are reported as skipped until an
- * installer is added (the map is keyed by the same agent ids as `SKILL_TARGET_AGENTS`,
- * so covering a new agent is a one-entry addition, never a router change).
+ * Claude Code (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`) both have
+ * a concrete SessionStart mechanism, keyed by the same agent ids as
+ * `SKILL_TARGET_AGENTS`. Both store hooks under the IDENTICAL
+ * `{ hooks: { SessionStart: [...] } }` JSON shape, so they share one merge routine
+ * (`installJsonSessionStartHook`) and covering a further agent is a one-entry addition,
+ * never a router change. Any target agent without an installer is reported as skipped.
+ *
+ * CODEX DISCREPANCY (verified against codex-cli 0.143.0 + the /openai/codex source):
+ * Codex additionally gates hooks behind `hooks = true` in `~/.codex/config.toml` AND a
+ * per-hook TRUST layer — every entry in `hooks.json` needs a matching
+ * `[hooks.state."<file>:<event>:<i>:<j>"] trusted_hash = "sha256:…"` in config.toml, where
+ * the hash is a SHA256 over a CANONICAL-TOML normalization of the hook identity computed
+ * inside Codex (`codex-rs/hooks/.../discovery.rs command_hook_hash`). That hash is
+ * internal + version-sensitive, so this installer deliberately does NOT synthesize it —
+ * it only writes the `hooks.json` entry (exactly as gh-axi/chrome-devtools-axi/lavish-axi
+ * already register themselves there) and surfaces that Codex will prompt to TRUST the
+ * hook (and needs `hooks = true`) on first session. This keeps the blast radius to a
+ * single JSON file, mirroring the Claude installer, and never mutates the user's TOML.
  *
  * The hook only installs when a DURABLE `loopany` command is resolvable
  * (`resolveDurableCommand`: our PATH shim OR a global install). The automatic
@@ -91,21 +105,23 @@ function isOurHookCommand(command: unknown, ours: string): boolean {
   return c === ours || c === "loopany" || c.endsWith("/loopany") || c === "loopany home";
 }
 
-/** Claude Code: a SessionStart command hook in `~/.claude/settings.json`. */
-const installClaudeCodeHook: HookInstaller = (s, remove) => {
-  const dir = path.join(s.homedir(), ".claude");
-  const file = path.join(dir, "settings.json");
-
-  let settings: Record<string, unknown> = {};
+/** Merge our bare-`loopany` SessionStart command hook into a JSON hooks file whose
+ *  root carries `{ hooks: { SessionStart: [...] } }`. Shared by Claude Code
+ *  (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`): identical shape, so
+ *  one routine owns the idempotent add / preserve-everyone-else / `--remove` logic and
+ *  the two surfaces cannot drift. Only OUR entry is ever touched; other SessionStart
+ *  entries, other events, and other root keys are preserved verbatim. */
+function installJsonSessionStartHook(s: Seams, remove: boolean, dir: string, file: string): string {
+  let root: Record<string, unknown> = {};
   try {
-    settings = JSON.parse(s.readFile(file)) as Record<string, unknown>;
-    if (!settings || typeof settings !== "object" || Array.isArray(settings)) settings = {};
+    root = JSON.parse(s.readFile(file)) as Record<string, unknown>;
+    if (!root || typeof root !== "object" || Array.isArray(root)) root = {};
   } catch {
-    settings = {}; // absent or unparseable → start fresh (we only touch SessionStart)
+    root = {}; // absent or unparseable → start fresh (we only touch SessionStart)
   }
 
-  const hooks = (typeof settings.hooks === "object" && settings.hooks && !Array.isArray(settings.hooks)
-    ? (settings.hooks as Record<string, unknown>)
+  const hooks = (typeof root.hooks === "object" && root.hooks && !Array.isArray(root.hooks)
+    ? (root.hooks as Record<string, unknown>)
     : {}) as Record<string, unknown>;
   const sessionStart = Array.isArray(hooks.SessionStart) ? (hooks.SessionStart as unknown[]) : [];
 
@@ -121,25 +137,51 @@ const installClaudeCodeHook: HookInstaller = (s, remove) => {
     if (!already) return "not installed";
     hooks.SessionStart = withoutOurs;
     if (Array.isArray(hooks.SessionStart) && (hooks.SessionStart as unknown[]).length === 0) delete hooks.SessionStart;
-    settings.hooks = hooks;
+    root.hooks = hooks;
     s.mkdir(dir);
-    s.writeFile(file, JSON.stringify(settings, null, 2) + "\n");
+    s.writeFile(file, JSON.stringify(root, null, 2) + "\n");
     return "removed";
   }
 
   withoutOurs.push({ hooks: [{ type: "command", command: s.command }] });
   hooks.SessionStart = withoutOurs;
-  settings.hooks = hooks;
+  root.hooks = hooks;
   s.mkdir(dir);
-  s.writeFile(file, JSON.stringify(settings, null, 2) + "\n");
+  s.writeFile(file, JSON.stringify(root, null, 2) + "\n");
   return already ? "refreshed" : "installed";
+}
+
+/** Claude Code: a SessionStart command hook in `~/.claude/settings.json`. */
+const installClaudeCodeHook: HookInstaller = (s, remove) => {
+  const dir = path.join(s.homedir(), ".claude");
+  return installJsonSessionStartHook(s, remove, dir, path.join(dir, "settings.json"));
+};
+
+/** Codex: a SessionStart command hook in `~/.codex/hooks.json` — the JSON hooks file
+ *  Codex discovers alongside `config.toml` (same `{ hooks: { SessionStart } }` schema as
+ *  Claude's settings.json). Codex ALSO requires hooks to be enabled (`hooks = true`) and
+ *  the entry to be TRUSTED on first session; we surface that in the report rather than
+ *  reaching into the user's TOML (see the module header). */
+const installCodexHook: HookInstaller = (s, remove) => {
+  const dir = path.join(s.homedir(), ".codex");
+  return installJsonSessionStartHook(s, remove, dir, path.join(dir, "hooks.json"));
 };
 
 /** Installers keyed by the same agent ids as `SKILL_TARGET_AGENTS`. An agent with no
  *  entry is reported `skipped (no session-hook integration yet)`. */
 const HOOK_INSTALLERS: Record<string, HookInstaller> = {
   "claude-code": installClaudeCodeHook,
+  codex: installCodexHook,
 };
+
+/** Whether Codex is a target with an installer — gates the Codex trust/enable note in
+ *  the report (so it never appears if Codex is dropped from `SKILL_TARGET_AGENTS`). */
+function codexInstalled(outcomes: AgentOutcome[]): boolean {
+  return (
+    HOOK_INSTALLERS.codex !== undefined &&
+    outcomes.some((o) => o.agent === "Codex" && (o.status === "installed" || o.status === "refreshed"))
+  );
+}
 
 export async function runSetup(args: string[], injected: SetupDeps = {}): Promise<number> {
   const durable = durableCommand(injected);
@@ -219,10 +261,18 @@ function reportHooks(s: Seams, outcomes: AgentOutcome[], remove: boolean): void 
   s.out(`setup hooks: ${remove ? "removed" : "installed"}\n`);
   s.out(`integrations[${outcomes.length}]{agent,status}:\n`);
   for (const o of outcomes) s.out(`  ${o.agent},${o.status}\n`);
-  s.out("help[1]:\n");
+  // Codex gates hooks behind `hooks = true` + a per-hook trust prompt; the installer
+  // only writes the entry, so tell the user about the one-time enable/trust step.
+  const codexNote = !remove && codexInstalled(outcomes);
+  s.out(`help[${codexNote ? 2 : 1}]:\n`);
   s.out(
     remove
       ? "  Run `loopany setup hooks` to reinstall the SessionStart home view\n"
       : "  Restart your coding-agent session so the SessionStart home view takes effect\n",
   );
+  if (codexNote) {
+    s.out(
+      "  Codex only: set `hooks = true` in ~/.codex/config.toml and trust the loopany hook when Codex prompts on first session\n",
+    );
+  }
 }
