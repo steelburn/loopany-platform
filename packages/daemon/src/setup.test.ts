@@ -27,7 +27,8 @@ function fakeFs(seed: Record<string, string> = {}) {
     err: (s: string) => void err.push(s),
   };
   const settingsPath = path.join("/home/u", ".claude", "settings.json");
-  return { deps, files, out: () => out.join(""), err: () => err.join(""), settingsPath };
+  const codexPath = path.join("/home/u", ".codex", "hooks.json");
+  return { deps, files, out: () => out.join(""), err: () => err.join(""), settingsPath, codexPath };
 }
 
 function sessionStart(json: string): any[] {
@@ -43,8 +44,14 @@ describe("runSetup hooks", () => {
     expect(ss[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/loopany" });
     expect(f.out()).toContain("integrations[");
     expect(f.out()).toContain("Claude Code,installed");
-    // Codex has no session-hook installer yet → reported as skipped, not silently dropped.
-    expect(f.out()).toContain("Codex,skipped");
+    // Codex now has a concrete installer → its own SessionStart hook in ~/.codex/hooks.json.
+    expect(f.out()).toContain("Codex,installed");
+    const cx = sessionStart(f.files.get(f.codexPath)!);
+    expect(cx).toHaveLength(1);
+    expect(cx[0].hooks[0]).toEqual({ type: "command", command: "/home/u/.local/bin/loopany" });
+    // The report tells the user about Codex's enable + trust prerequisites.
+    expect(f.out()).toContain("hooks = true");
+    expect(f.out()).toContain("trust the loopany hook");
   });
 
   test("is idempotent: a second install does not duplicate the entry (refreshes it)", async () => {
@@ -124,6 +131,89 @@ describe("runSetup hooks", () => {
   });
 });
 
+// ---- Codex SessionStart installer (~/.codex/hooks.json) ------------------------
+// Mirrors the Claude-hook tests: idempotent install, merge preserves the user's other
+// hooks/events, and --remove uninstalls ONLY ours. Codex's hooks.json shares Claude's
+// `{ hooks: { SessionStart: [...] } }` schema, so both flow through one merge routine.
+describe("runSetup hooks — Codex (~/.codex/hooks.json)", () => {
+  function codexSessionStart(f: ReturnType<typeof fakeFs>): any[] {
+    return sessionStart(f.files.get(f.codexPath)!);
+  }
+
+  test("is idempotent: a second install does not duplicate the Codex entry (refreshes it)", async () => {
+    const f = fakeFs();
+    await runSetup(["hooks"], f.deps);
+    await runSetup(["hooks"], f.deps);
+    expect(codexSessionStart(f)).toHaveLength(1);
+    expect(f.out()).toContain("Codex,refreshed");
+  });
+
+  test("preserves the user's OTHER Codex hooks — other SessionStart entries AND other events", async () => {
+    const existing = JSON.stringify({
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: "gh-axi", timeout: 10 }], matcher: "" }],
+        Stop: [{ hooks: [{ type: "command", command: "/opt/notify.sh" }] }],
+      },
+    });
+    const f = fakeFs({ [path.join("/home/u", ".codex", "hooks.json")]: existing });
+    await runSetup(["hooks"], f.deps);
+    const root = JSON.parse(f.files.get(f.codexPath)!);
+    // Our entry was added alongside the pre-existing gh-axi SessionStart hook.
+    expect(root.hooks.SessionStart).toHaveLength(2);
+    expect(root.hooks.SessionStart.some((e: any) => e.hooks[0].command === "gh-axi")).toBe(true);
+    expect(root.hooks.SessionStart.some((e: any) => e.hooks[0].command === "/home/u/.local/bin/loopany")).toBe(true);
+    // The gh-axi entry kept its matcher/timeout, and the unrelated Stop event is untouched.
+    expect(root.hooks.SessionStart.find((e: any) => e.hooks[0].command === "gh-axi").matcher).toBe("");
+    expect(root.hooks.Stop).toEqual([{ hooks: [{ type: "command", command: "/opt/notify.sh" }] }]);
+  });
+
+  test("--remove uninstalls only our Codex entry, preserving the rest", async () => {
+    const existing = JSON.stringify({
+      hooks: {
+        SessionStart: [
+          { hooks: [{ type: "command", command: "gh-axi", timeout: 10 }], matcher: "" },
+          { hooks: [{ type: "command", command: "/home/u/.local/bin/loopany" }] },
+        ],
+      },
+    });
+    const f = fakeFs({ [path.join("/home/u", ".codex", "hooks.json")]: existing });
+    expect(await runSetup(["hooks", "--remove"], f.deps)).toBe(0);
+    const cx = codexSessionStart(f);
+    expect(cx).toHaveLength(1);
+    expect(cx[0].hooks[0].command).toBe("gh-axi");
+    expect(f.out()).toContain("Codex,removed");
+  });
+
+  test("--remove drops an empty SessionStart key but keeps other events", async () => {
+    const existing = JSON.stringify({
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: "/home/u/.local/bin/loopany" }] }],
+        Stop: [{ hooks: [{ type: "command", command: "/opt/notify.sh" }] }],
+      },
+    });
+    const f = fakeFs({ [path.join("/home/u", ".codex", "hooks.json")]: existing });
+    await runSetup(["hooks", "--remove"], f.deps);
+    const root = JSON.parse(f.files.get(f.codexPath)!);
+    expect(root.hooks.SessionStart).toBeUndefined();
+    expect(root.hooks.Stop).toBeDefined();
+    expect(f.out()).toContain("Codex,removed");
+  });
+
+  test("--remove on a clean Codex config reports `not installed`", async () => {
+    const f = fakeFs();
+    await runSetup(["hooks", "--remove"], f.deps);
+    expect(f.out()).toContain("Codex,not installed");
+    // The remove report omits the enable/trust note (it's install-only guidance).
+    expect(f.out()).not.toContain("hooks = true");
+  });
+
+  test("an unparseable Codex hooks.json is treated as fresh (only SessionStart is touched)", async () => {
+    const f = fakeFs({ [path.join("/home/u", ".codex", "hooks.json")]: "{not json" });
+    expect(await runSetup(["hooks"], f.deps)).toBe(0);
+    expect(codexSessionStart(f)).toHaveLength(1);
+  });
+});
+
 describe("refreshHooks (automatic up/update path)", () => {
   test("no durable `loopany` → installs NO hook and prints skip guidance", async () => {
     const f = fakeFs();
@@ -140,6 +230,13 @@ describe("refreshHooks (automatic up/update path)", () => {
     expect(ss).toHaveLength(1);
     expect(ss[0].hooks[0].command).toBe("/opt/node/bin/loopany");
     expect(f.out()).toContain("SessionStart home view");
+  });
+
+  test("surfaces Codex's enable/trust prerequisite on the automatic path too", async () => {
+    const f = fakeFs();
+    await refreshHooks({ ...f.deps, command: undefined, resolveCommand: () => "/opt/node/bin/loopany" });
+    expect(f.out()).toContain("hooks = true");
+    expect(f.out()).toContain("trusted on first session");
   });
 });
 

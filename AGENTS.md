@@ -523,10 +523,19 @@ computes pure functions. Run instructions: `README.md`.
   crafted run-only 403 reaches the agent (F3); `loopany show` out-of-run (F1) resolves the
   loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **`loopany setup hooks [--remove]`** (`setup.ts`): idempotent SessionStart hook install
-  per `SKILL_TARGET_AGENTS` (only Claude Code has a concrete installer today — a
-  `~/.claude/settings.json` SessionStart command hook running the durable ABSOLUTE
-  `loopany` path (our shim or a PATH global), whose stdout lands as ambient context;
-  other agents reported `skipped`). `up`/`update` call the best-effort
+  per `SKILL_TARGET_AGENTS`. Claude Code (`~/.claude/settings.json`) and Codex
+  (`~/.codex/hooks.json`) both have concrete installers sharing ONE merge routine
+  (`installJsonSessionStartHook` — both use the identical `{hooks:{SessionStart:[...]}}`
+  JSON shape); each writes a SessionStart command hook running the durable ABSOLUTE
+  `loopany` path (our shim or a PATH global), whose stdout lands as ambient context; an
+  agent with no installer is reported `skipped`. **Codex discrepancy** (verified against
+  codex-cli 0.143.0 + `/openai/codex` source): Codex additionally gates hooks behind
+  `hooks = true` in `~/.codex/config.toml` AND a per-hook TRUST layer (`[hooks.state]`
+  `trusted_hash = sha256:<canonical-TOML-of-normalized-identity>`, computed inside Codex).
+  The installer deliberately writes ONLY the `hooks.json` entry (never synthesizes the
+  version-sensitive hash, never mutates the TOML) and SURFACES the enable/trust step in the
+  report. NB: Codex is identity/skill/hook-onboarded but NOT executable — `runner.ts` always
+  spawns `claude` (`loops.agent` is recording-only). `up`/`update` call the best-effort
   `refreshHooks` (never blocks). The ambient hook installs ONLY with a DURABLE on-PATH
   `loopany` (`resolveDurableCommand`: our shim OR a NON-ephemeral PATH global, returned as
   an absolute path - the transient `npx`/`_npx` PATH entry is filtered out, so it gates
