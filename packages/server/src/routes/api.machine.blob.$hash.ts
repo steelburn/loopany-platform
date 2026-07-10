@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { safeDecode } from '../lib/url'
+import { machineRouteLimit } from '../gateway/rateLimit'
 
 /**
  * PUT /api/machine/blob/:hash — upload one content-addressed blob's raw bytes
@@ -13,6 +14,8 @@ export const Route = createFileRoute('/api/machine/blob/$hash')({
       PUT: async ({ request }: { request: Request }) => {
         const auth = request.headers.get('authorization') ?? ''
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+        const limited = machineRouteLimit(request, token || undefined)
+        if (limited) return limited
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         // Malformed percent-encoding must be a clean 400, never a thrown 500.
         const hash = safeDecode(new URL(request.url).pathname.split('/').pop() ?? '')

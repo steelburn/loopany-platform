@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { readJsonBody } from '../gateway/http'
+import { machineRouteLimit } from '../gateway/rateLimit'
 
 /**
  * POST /api/machine/sync — live artifact sync (Bearer DEVICE token, not the run
@@ -13,6 +14,8 @@ export const Route = createFileRoute('/api/machine/sync')({
       POST: async ({ request }: { request: Request }) => {
         const auth = request.headers.get('authorization') ?? ''
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+        const limited = machineRouteLimit(request, token || undefined)
+        if (limited) return limited
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const { SYNC_BODY_CAP } = await import('../gateway/artifacts.js')
         const parsed = await readJsonBody(request, SYNC_BODY_CAP)

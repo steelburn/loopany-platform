@@ -27,9 +27,11 @@ import { autopauseMessage, completionMessage, deferredMessage, dispatchNotificat
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { machinePresence } from "../lib/machinePresence.js";
+import { loginGateEnabled } from "../lib/loginGate.js";
 import { snapshotRetention } from "../env.js";
 import {
   machineIdFromToken,
+  isDeviceTokenShape,
   getDeviceOwner,
   readClaimIntent,
   registerRunLease,
@@ -459,26 +461,45 @@ export class MachineGateway {
      *  watch array is omitted from the response (an old daemon never echoes). */
     watchDigest?: string,
   ): Promise<HttpResult> {
+    // Reject malformed tokens (empty / wrong prefix / junk) before any DB work —
+    // a cheap filter at the enrollment surface (the auth boundary is the gate below).
+    if (!isDeviceTokenShape(deviceToken)) {
+      return { status: 401, body: { error: "invalid device token" } };
+    }
     const machineId = machineIdFromToken(deviceToken);
     let machine = await store.getMachine(machineId);
-    if (!machine) {
-      // Self-register: the daemon presents a valid device token (minted by New
-      // loop or stored locally) — create its machine row on first contact, no
-      // web-side pre-creation needed. Personal/low-security (BYOA §8).
-      // Owner remembered at mint time (AI-First claim) when the gate is on;
-      // "shared" otherwise (open mode, or a token minted out-of-band).
-      const owner = (await getDeviceOwner(machineId)) ?? "shared";
+    if (machine) {
+      // Already enrolled: the derived machine id matched. Verify the FULL token hash
+      // too — defense against a 64-bit machine-id truncation collision handing one
+      // machine's authority to a different token (audit H-01 criterion (a)).
+      if (machine.tokenHash && machine.tokenHash !== sha256(deviceToken)) {
+        return { status: 401, body: { error: "device token mismatch" } };
+      }
+    } else {
+      // First contact — self-register, but ONLY an enrollable token:
+      //  - open/dev mode (gate off): any well-shaped token enrolls into the shared
+      //    workspace (anonymous BYOA is intentional there);
+      //  - gated mode (GitHub login on): the token MUST resolve to a live, unexpired
+      //    connect key bound to a signed-in user (getDeviceOwner) — i.e. the owner
+      //    ran the web/AI-First connect flow. An unknown/forged token is REJECTED,
+      //    never minted into a "shared" machine (audit H-01 / M2). This closes the
+      //    unauthenticated self-registration + resource-creation hole.
+      const owner = await getDeviceOwner(machineId);
+      if (loginGateEnabled() && owner == null) {
+        return { status: 401, body: { error: "unknown device token — connect this machine first" } };
+      }
+      const ownerId = owner ?? "shared";
       // Home/default team for this machine: ALWAYS the owner's personal team (the
       // no-claim fallback for loops created on it later). A loop's actual team comes
       // from the validated claim intent at createLoop time, never from this home
       // team — so cross-team capture still lands in team B. Keeping home = personal
       // team preserves the safe invariant that a machine's fallback can never be a
       // shared team the owner is merely a (possibly later-revoked) member of.
-      const teamId = store.teamIdForUser(owner);
-      await store.ensureTeam(teamId, owner === "shared" ? "Shared Workspace" : "Personal Team", owner === "shared" ? null : owner);
+      const teamId = store.teamIdForUser(ownerId);
+      await store.ensureTeam(teamId, ownerId === "shared" ? "Shared Workspace" : "Personal Team", ownerId === "shared" ? null : ownerId);
       machine = await store.createMachine({
         id: machineId,
-        userId: owner,
+        userId: ownerId,
         teamId,
         // Always name it (never blank) — listMachines hides empty-name rows, so a
         // self-registered machine must carry a name to show up + be counted.

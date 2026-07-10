@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
+import { machineRouteLimit } from '../gateway/rateLimit'
 
 /** POST /machine/report — finalize a run (Bearer run token). */
 export const Route = createFileRoute('/machine/report')({
@@ -8,6 +9,8 @@ export const Route = createFileRoute('/machine/report')({
       POST: async ({ request }: { request: Request }) => {
         const auth = request.headers.get('authorization') ?? ''
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+        const limited = machineRouteLimit(request, token || undefined)
+        if (limited) return limited
         if (!token) return Response.json({ error: 'missing token' }, { status: 401 })
         const parsed = await readJsonBody(request, MACHINE_BODY_CAP)
         if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })

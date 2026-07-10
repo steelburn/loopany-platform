@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { machineRouteLimit } from '../gateway/rateLimit'
 
 /** GET /api/machine/log?loopId=<id>&limit=<n> — recent run history (status, session
  *  ids, reported metrics, and transcripts) for a loop bound to this machine (Bearer
@@ -10,6 +11,8 @@ export const Route = createFileRoute('/api/machine/log')({
       GET: async ({ request }: { request: Request }) => {
         const auth = request.headers.get('authorization') ?? ''
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+        const limited = machineRouteLimit(request, token || undefined)
+        if (limited) return limited
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const url = new URL(request.url)
         const loopId = url.searchParams.get('loopId') ?? ''
