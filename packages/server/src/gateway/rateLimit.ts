@@ -4,8 +4,8 @@
  * framework: a single-scheduler Loopany deployment runs one process, so an
  * in-memory token bucket per key is the right-sized backstop. It bounds the
  * unauthenticated self-registration / resource-creation surface (audit H-01 / M2)
- * WITHOUT starving a legitimately connected daemon, which short-polls ~every 3s,
- * long-polls ~20s, and bursts a handful of concurrent blob PUTs per sync flush.
+ * WITHOUT starving a legitimately connected daemon, which short-polls ~every 3s
+ * and long-polls ~20s.
  *
  * Two tiers, both fail-closed with a 429 when empty:
  *  - PER-IP (always applied): the primary flood guard. An attacker POSTing a stream
@@ -17,13 +17,15 @@
  *    gated mode never reaches a generous per-credential allowance (enrollment fails
  *    closed under the IP tier).
  *
- * The blob-PUT and sync-POST routes DISABLE the per-token tier (`perToken:false`):
- * a large first sync bursts many concurrent blob PUTs on ONE device token, which
- * would exhaust the modest per-token bucket and 429 legitimate uploads. Those two
- * routes are already bounded by the sync hash-handshake (the server only accepts
- * hashes it asked THIS machine for) plus the per-loop 500MB byte cap, so the
- * per-token tier adds throttle risk with little security gain there. They stay on
- * the PER-IP tier (the real flood boundary); every other machine route keeps both.
+ * The byte-ingress routes — blob PUT (`api.machine.blob.$hash`) and sync POST
+ * (`api.machine.sync`) — are EXEMPT from rate limiting ENTIRELY (they never call
+ * `machineRouteLimit`). Both require a valid registered device token (unknown ⇒
+ * 401, not an unauthenticated surface) and are already bounded by the sync
+ * hash-handshake (the server only accepts hashes it asked THIS machine for) plus
+ * the per-loop 500MB / per-file 10MB / 32MB-body caps. A large first sync bursts
+ * many concurrent PUTs on ONE device token, so either tier would only throttle
+ * legitimate uploads with no real security gain. Every OTHER machine route keeps
+ * both tiers.
  *
  * Keyed maps are bounded (LRU-ish oldest-eviction) so a flood of distinct
  * IPs/tokens can't grow memory without limit. Pure/injectable clock for tests.
@@ -143,10 +145,15 @@ export function clientIp(request: Request): string {
   return "unknown";
 }
 
-/** A 429 response with a Retry-After hint, or null when the request is allowed. */
+/**
+ * A 429 response with a Retry-After hint. Carries a text-sink `text` + `exitCode`
+ * alongside `error` so the batch-7 text-sink routes (`/api/machine/cli`,
+ * `/agent-api/loop`) surface a real rate-limit message — the daemon prints
+ * `body.text`, and an absent `text` would read as a pre-0.12 `SERVER_TOO_OLD`.
+ */
 function tooMany(): Response {
   return Response.json(
-    { error: "rate limited — slow down" },
+    { error: "rate limited — slow down", text: "rate limited — slow down", exitCode: 1 },
     { status: 429, headers: { "retry-after": "1" } },
   );
 }
@@ -155,23 +162,20 @@ function tooMany(): Response {
  * Enforce the machine-route rate limits for one request. Call it at the top of a
  * machine route handler, right after reading the Bearer token (pass it so a valid
  * daemon keys off its own per-machine bucket). Returns a 429 `Response` to return
- * verbatim, or null to proceed.
- *
- * `opts.perToken` (default true) gates the per-token tier: the blob-PUT / sync-POST
- * routes pass `false` so a large first sync's burst of concurrent PUTs isn't
- * throttled by the modest per-token bucket (still bounded by the per-IP tier + the
- * sync handshake + the per-loop byte cap). The per-IP tier always applies.
+ * verbatim, or null to proceed. Both tiers apply: the per-IP flood guard always,
+ * and the per-token fairness tier whenever a credential is present. (The byte-
+ * ingress routes are exempt entirely and simply do not call this — see the module
+ * doc.)
  */
 export function machineRouteLimit(
   request: Request,
   token?: string,
-  opts: { perToken?: boolean; now?: number } = {},
+  opts: { now?: number } = {},
 ): Response | null {
   if (!rateLimitEnabled()) return null;
   const now = opts.now ?? Date.now();
-  const perToken = opts.perToken ?? true;
   if (!ipLimiter.allow(clientIp(request), now)) return tooMany();
-  if (perToken && token && !tokenLimiter.allow(token, now)) return tooMany();
+  if (token && !tokenLimiter.allow(token, now)) return tooMany();
   return null;
 }
 

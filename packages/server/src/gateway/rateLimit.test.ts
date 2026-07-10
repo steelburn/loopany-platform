@@ -93,26 +93,35 @@ describe("machineRouteLimit", () => {
     expect(rl.machineRouteLimit(from("9.9.9.9"), undefined, { now })).toBeNull(); // fresh bucket
   });
 
-  test("perToken:false skips the per-token tier (blob/sync path) but keeps per-IP", () => {
+  test("the per-token tier always applies when a credential is present", () => {
     rl.__resetMachineRateLimiters();
     const now = 4_000_000;
     // Distinct IP per call so the per-IP tier never trips; only the per-token tier
-    // could throttle a shared device token. With perToken:false it never does.
-    const from = (ip: string) => new Request("http://x/api/machine/sync", { method: "POST", headers: { "x-forwarded-for": ip } });
-    for (let i = 0; i < 200; i++) {
-      const res = rl.machineRouteLimit(from(`10.0.0.${i}`), "dk_shared", { perToken: false, now });
-      expect(res).toBeNull();
-    }
-    // The SAME shared token WOULD trip the per-token bucket (default 120 burst) when
-    // the tier is on — proving the exemption is what let the burst through above.
+    // could throttle a shared device token. It always does now (no exemption option).
+    const from = (ip: string) => new Request("http://x/api/machine/loop", { method: "POST", headers: { "x-forwarded-for": ip } });
     let tripped = false;
     for (let i = 0; i < 200; i++) {
-      if (rl.machineRouteLimit(from(`11.0.0.${i}`), "dk_shared_on", { now })) {
+      if (rl.machineRouteLimit(from(`11.0.0.${i}`), "dk_shared", { now })) {
         tripped = true;
         break;
       }
     }
     expect(tripped).toBe(true);
+  });
+});
+
+// The byte-ingress routes (blob PUT / sync POST) are EXEMPT from rate limiting
+// entirely — they never import or call machineRouteLimit. Guard that here so a
+// future edit can't silently re-add a limiter that would throttle a large sync.
+describe("byte-ingress routes are unlimited", () => {
+  test("blob PUT and sync POST route source never references machineRouteLimit", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const dir = fileURLToPath(new URL("../routes/", import.meta.url));
+    for (const f of ["api.machine.blob.$hash.ts", "api.machine.sync.ts"]) {
+      const src = await readFile(dir + f, "utf8");
+      expect(src).not.toContain("machineRouteLimit");
+    }
   });
 });
 

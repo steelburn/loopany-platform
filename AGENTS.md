@@ -387,13 +387,15 @@ computes pure functions. Run instructions: `README.md`.
   guard — forged-token floods share one IP bucket) + per-token (per-machine
   fairness), 429 when spent, bounded-memory LRU eviction. Env-tunable
   (`LOOPANY_RL_IP_BURST`/`_PER_SEC`, `LOOPANY_RL_TOKEN_*`); defaults (240 burst /
-  8·s per IP) comfortably clear a connected daemon's 3s/20s poll + sync bursts.
-  The blob-PUT (`api.machine.blob.$hash`) and sync-POST (`api.machine.sync`) routes
-  pass `machineRouteLimit(..., {perToken:false})` — a large first sync bursts many
-  concurrent blob PUTs on ONE device token, which would exhaust the modest per-token
-  bucket and 429 legit uploads; those routes are already bounded by the sync
-  hash-handshake + the per-loop 500MB byte cap, so they keep ONLY the per-IP tier.
-  Every other machine route keeps BOTH tiers.
+  8·s per IP) comfortably clear a connected daemon's 3s/20s poll.
+  The byte-ingress routes — blob-PUT (`api.machine.blob.$hash`) and sync-POST
+  (`api.machine.sync`) — are EXEMPT from rate limiting ENTIRELY (they never call
+  `machineRouteLimit`): a large first sync bursts many concurrent blob PUTs on ONE
+  device token, so either tier would only throttle legit uploads. Both already
+  require a VALID registered device token (unknown ⇒ 401, not an unauthenticated
+  surface) and are bounded by the sync hash-handshake (server only accepts hashes it
+  asked THIS machine for) + per-loop 500MB / per-file 10MB / 32MB-body caps, so a
+  limiter adds no real protection. Every OTHER machine route keeps BOTH tiers.
   OFF under vitest (`VITEST`/`NODE_ENV=test`) unless `LOOPANY_RATE_LIMIT=on`, so it
   never trips the suites; force either way with `LOOPANY_RATE_LIMIT`. `clientIp`
   trusts `Fly-Client-IP` → first `X-Forwarded-For` hop → `X-Real-IP` → one shared
