@@ -431,7 +431,7 @@ export function LoopDetailView({ id }: { id: string }) {
   ) : pushOpen ? (
     <div className="flex flex-wrap items-center gap-2.5">
       <span className="text-label font-medium text-secondary">Push</span>
-      <select className={pushSelectCls} value={job.notify} disabled={busy} onChange={(e) => void setPush({ notify: e.target.value })}>
+      <select aria-label="Notify" className={pushSelectCls} value={job.notify} disabled={busy} onChange={(e) => void setPush({ notify: e.target.value })}>
         {['auto', 'always', 'never'].map((n) => (
           <option key={n} value={n}>
             {n}
@@ -439,7 +439,7 @@ export function LoopDetailView({ id }: { id: string }) {
         ))}
       </select>
       <span aria-hidden className="text-secondary">→</span>
-      <select className={pushSelectCls} value={job.channelId ?? ''} disabled={busy} onChange={(e) => void setPush({ channelId: e.target.value })}>
+      <select aria-label="Push channel" className={pushSelectCls} value={job.channelId ?? ''} disabled={busy} onChange={(e) => void setPush({ channelId: e.target.value })}>
         <option value="">none (dashboard only)</option>
         {channels.map((ch) => (
           <option key={ch.id} value={ch.id}>

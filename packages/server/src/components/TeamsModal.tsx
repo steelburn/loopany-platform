@@ -318,7 +318,7 @@ export function TeamsModal({
                 <div className="mb-4">
                   <label className={labelCls}>Team name</label>
                   <div className="flex gap-2">
-                    <input className={inputCls} value={renameVal} onChange={(e) => setRenameVal(e.target.value)} />
+                    <input aria-label="Team name" className={inputCls} value={renameVal} onChange={(e) => setRenameVal(e.target.value)} />
                     <button
                       className={btn}
                       disabled={busy || !renameVal.trim() || renameVal.trim() === detail.name}

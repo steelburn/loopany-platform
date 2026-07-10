@@ -214,7 +214,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           <Section title="Notifications" />
           <div className="min-w-0">
             <label className={labelCls}>Notify</label>
-            <select className={selectCls} value={f.notify} onChange={(e) => set('notify', e.target.value)}>
+            <select aria-label="Notify" className={selectCls} value={f.notify} onChange={(e) => set('notify', e.target.value)}>
               {['auto', 'always', 'never'].map((n) => (
                 <option key={n}>{n}</option>
               ))}
@@ -223,7 +223,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           </div>
           <div className="min-w-0">
             <label className={labelCls}>Push channel</label>
-            <select className={selectCls} value={f.channelId} onChange={(e) => set('channelId', e.target.value)}>
+            <select aria-label="Push channel" className={selectCls} value={f.channelId} onChange={(e) => set('channelId', e.target.value)}>
               <option value="">none (dashboard only)</option>
               {channels.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -236,7 +236,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           <Section title="Execution" hint="Which coding agent on the machine runs this loop." />
           <div className="min-w-0">
             <label className={labelCls}>Coding agent</label>
-            <select className={selectCls} value={f.agent} onChange={(e) => set('agent', e.target.value as CodingAgent)}>
+            <select aria-label="Coding agent" className={selectCls} value={f.agent} onChange={(e) => set('agent', e.target.value as CodingAgent)}>
               {CODING_AGENTS.map((a) => (
                 <option key={a} value={a}>
                   {AGENT_LABEL[a] ?? a}
