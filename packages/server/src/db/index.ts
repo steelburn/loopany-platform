@@ -88,8 +88,17 @@ function open(): { db: Db; client: Client; driver: Driver } {
         "DATABASE_URL has no sslmode — the connection may be plaintext; append ?sslmode=require",
       );
     }
-    // Conservative pool for one always-on machine against the pooler.
-    const client = postgres(url, { prepare: false, max: 10, idle_timeout: 30, connect_timeout: 15 });
+    // Conservative pool for one always-on machine against the pooler. `max_lifetime`
+    // + `statement_timeout` are the pool's self-healing ring after the 2026-07-09
+    // wedged-pool incident (see api.health.db.ts for the full story + Fly backstop).
+    const client = postgres(url, {
+      prepare: false,
+      max: 10,
+      idle_timeout: 30,
+      connect_timeout: 15,
+      max_lifetime: 60 * 30, // 30 min — retire connections by age so dead sockets drop
+      connection: { statement_timeout: 30_000 }, // 30s server-side kill for a hung query (ms)
+    });
     const db = drizzlePostgres(client, { schema });
     g.__loopanyClient = client;
     g.__loopanyDb = db;
