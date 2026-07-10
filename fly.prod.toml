@@ -43,6 +43,16 @@ primary_region = "sjc"
   auto_start_machines = true
   min_machines_running = 1
 
+  # DB-touching health check → Fly auto-restarts a machine whose DB pool wedged
+  # (rationale: packages/server/src/routes/api.health.db.ts). A 503/timeout from
+  # /api/health/db marks it unhealthy; grace_period covers boot + in-process migrations.
+  [[http_service.checks]]
+    method = "get"
+    path = "/api/health/db"
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+
 [[vm]]
   size = "shared-cpu-1x"
   memory = "1024mb"
