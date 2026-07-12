@@ -370,6 +370,37 @@ computes pure functions. Run instructions: `README.md`.
   cross-team create is fail-closed: claim minter must be the machine owner AND
   membership is re-validated at `createLoop` time. A machine's home team is always
   the owner's personal team; a loop's team comes from the validated claim.
+- **Machine ENROLLMENT is gated** (`gateway/index.ts` `poll` is the ONLY
+  self-register surface; every other machine route already 401s an unknown
+  machine). `poll` validates the `dk_` token SHAPE (`isDeviceTokenShape`, a cheap
+  malformed-input filter, NOT the auth boundary) then, on first contact: open mode
+  (gate off) enrolls anonymously into `shared` as before; GATED mode
+  (`loginGateEnabled()`, the live twin of auth.ts `authEnabled`) enrolls ONLY a
+  token that resolves to a live connect key (`getDeviceOwner`) — an unknown/forged
+  token is 401, never a `shared` machine (closes audit H-01/M2: unauthenticated
+  machine/loop-row creation). An existing machine also re-checks the full
+  `tokenHash` (id-collision guard). `lib/loginGate.ts` is the single source of the
+  gate condition (leaf module, no betterAuth — keeps it off the poll hot path).
+- **Machine routes are RATE LIMITED** (`gateway/rateLimit.ts`
+  `machineRouteLimit`, applied at the top of every `/api/machine/*` + `/agent-api/loop`
+  + `/machine/report` handler): in-process token buckets, per-IP (primary flood
+  guard — forged-token floods share one IP bucket) + per-token (per-machine
+  fairness), 429 when spent, bounded-memory LRU eviction. Env-tunable
+  (`LOOPANY_RL_IP_BURST`/`_PER_SEC`, `LOOPANY_RL_TOKEN_*`); defaults (240 burst /
+  8·s per IP) comfortably clear a connected daemon's 3s/20s poll.
+  The byte-ingress routes — blob-PUT (`api.machine.blob.$hash`) and sync-POST
+  (`api.machine.sync`) — are EXEMPT from rate limiting ENTIRELY (they never call
+  `machineRouteLimit`): a large first sync bursts many concurrent blob PUTs on ONE
+  device token, so either tier would only throttle legit uploads. Both already
+  require a VALID registered device token (unknown ⇒ 401, not an unauthenticated
+  surface) and are bounded by the sync hash-handshake (server only accepts hashes it
+  asked THIS machine for) + per-loop 500MB / per-file 10MB / 32MB-body caps, so a
+  limiter adds no real protection. Every OTHER machine route keeps BOTH tiers.
+  OFF under vitest (`VITEST`/`NODE_ENV=test`) unless `LOOPANY_RATE_LIMIT=on`, so it
+  never trips the suites; force either way with `LOOPANY_RATE_LIMIT`. `clientIp`
+  trusts `Fly-Client-IP` → first `X-Forwarded-For` hop → `X-Real-IP` → one shared
+  `unknown` bucket (fail-closed). NB: per-owner machine/loop QUOTAS are a noted
+  follow-up, not yet implemented.
 - Daemon jail: `LOOPANY_ROOTS` is an always-applied local jail (`roots.ts`) -
   server-sent roots can only NARROW it, paths are resolve-normalized before the
   prefix check. Child env is allowlisted everywhere (`spawn.ts`); the workflow

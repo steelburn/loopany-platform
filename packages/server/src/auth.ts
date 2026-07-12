@@ -13,12 +13,15 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 import { db } from "./db/index.js";
 import * as store from "./db/store.js";
+import { loginGateEnabled } from "./lib/loginGate.js";
 
 const clientId = process.env.GITHUB_CLIENT_ID?.trim();
 const clientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
 
-/** Auth is enforced only when a GitHub OAuth app is configured. */
-export const authEnabled = !!(clientId && clientSecret);
+/** Auth is enforced only when a GitHub OAuth app is configured. Single source of
+ *  the condition is `loginGateEnabled()` — the machine-enrollment guard reads it
+ *  live so the two can never drift. */
+export const authEnabled = loginGateEnabled();
 
 // The session-signing secret. With the gate ON a real secret is REQUIRED —
 // falling back to the public dev constant would let anyone forge sessions, so

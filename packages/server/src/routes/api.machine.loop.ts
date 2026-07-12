@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
+import { machineRouteLimit } from '../gateway/rateLimit'
 
 /** Bearer device token from the request (the machine's persisted ~/.loopany token). */
 function deviceToken(request: Request): string {
@@ -18,6 +19,8 @@ export const Route = createFileRoute('/api/machine/loop')({
     handlers: {
       POST: async ({ request }: { request: Request }) => {
         const token = deviceToken(request)
+        const limited = machineRouteLimit(request, token || undefined)
+        if (limited) return limited
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const parsed = await readJsonBody(request, MACHINE_BODY_CAP)
         if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
@@ -28,6 +31,8 @@ export const Route = createFileRoute('/api/machine/loop')({
       },
       GET: async ({ request }: { request: Request }) => {
         const token = deviceToken(request)
+        const limited = machineRouteLimit(request, token || undefined)
+        if (limited) return limited
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const { getGateway } = await import('../server/boot.js')
         const r = await (await getGateway()).listLoops(token)
@@ -35,6 +40,8 @@ export const Route = createFileRoute('/api/machine/loop')({
       },
       PATCH: async ({ request }: { request: Request }) => {
         const token = deviceToken(request)
+        const limited = machineRouteLimit(request, token || undefined)
+        if (limited) return limited
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const parsed = await readJsonBody(request, MACHINE_BODY_CAP)
         if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })

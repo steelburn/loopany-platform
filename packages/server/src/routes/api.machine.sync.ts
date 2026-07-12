@@ -6,6 +6,11 @@ import { readJsonBody } from '../gateway/http'
  * token). The daemon posts a loop's full file manifest + optional inline bytes;
  * the server stores blobs + reconciles artifact_files and replies with needHashes.
  * Larger body limit than the default JSON routes (a sync may inline small files).
+ *
+ * This byte-ingress route is deliberately NOT rate limited (same rationale as the
+ * blob PUT): it requires a valid registered device token (unknown ⇒ 401) and is
+ * already bounded by the sync hash-handshake + the per-loop 500MB byte cap + the
+ * 32MB sync-body cap, so a limiter would only throttle a legitimate large sync.
  */
 export const Route = createFileRoute('/api/machine/sync')({
   server: {

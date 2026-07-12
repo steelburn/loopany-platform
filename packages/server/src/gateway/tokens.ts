@@ -34,6 +34,21 @@ export function machineIdFromToken(token: string): string {
   return `m-${sha256(token).slice(0, 16)}`;
 }
 
+/**
+ * Whether a string is shaped like a device token (`dk_…`). A cheap malformed-input
+ * filter at the enrollment surface — it rejects junk (empty / wrong prefix / absurd
+ * length / stray whitespace) BEFORE any lookup work. It is NOT the auth boundary: a
+ * well-shaped but unknown token is still rejected by the connect-key gate in
+ * gated mode (`gateway/index.ts` `poll`). The charset is deliberately permissive
+ * past the prefix — real tokens are `dk_`+hex (`mintDeviceToken`), but hand-minted
+ * demo/dev tokens (e.g. `dk_demo_cookie_unified`) are legitimately word-shaped, and
+ * only the login gate decides who may enroll.
+ */
+const DEVICE_TOKEN_RE = /^dk_[A-Za-z0-9_-]{3,120}$/;
+export function isDeviceTokenShape(token: string): boolean {
+  return DEVICE_TOKEN_RE.test(token);
+}
+
 // ---- connect keys (minted device token → owner + team binding, durable) ----
 // A connect-key/claim is minted from a SPECIFIC team's dashboard session; we bind
 // the minter and the VALIDATED active team to the key so (a) the daemon's first
