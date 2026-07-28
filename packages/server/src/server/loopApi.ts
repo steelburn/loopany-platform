@@ -28,6 +28,7 @@ import type {
   TranscriptStep,
 } from '../types'
 import { coerceCodingAgent } from '../types'
+import type { FirstRunState } from '../lib/firstRun.js'
 import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
@@ -72,13 +73,18 @@ export const getAuthState = createServerFn({ method: 'GET' }).handler(async () =
  * `node /abs/packages/daemon/dist/cli.js`, so loops created from THIS server tell
  * Claude Code to run your local code instead of the registry build.
  */
-export const getConfig = createServerFn({ method: 'GET' }).handler(() => {
+export const getConfig = createServerFn({ method: 'GET' }).handler(async () => {
+  const { onboardingSimEnabled } = await import('../lib/onboardingSim.js')
   const custom = process.env.LOOPANY_CLI?.trim()
   return {
     loopanyCli: custom || 'npx @crewlet/loopany@latest',
     /** True when a non-default (dev) CLI is configured — the New-loop paste then
      *  carries an explicit `loopany-cli:` line so Claude Code uses it verbatim. */
     customCli: !!custom,
+    /** DEV-ONLY: whether the onboarding simulation shim is live (dev build + the
+     *  `LOOPANY_ONBOARDING_SIM` opt-in). The wizard renders its "simulate" buttons
+     *  ONLY when this is true; always false in a production build. */
+    onboardingSim: onboardingSimEnabled(),
   }
 })
 
@@ -427,4 +433,35 @@ export const claimStatus = createServerFn({ method: 'GET' })
   .handler(async ({ data: token }): Promise<{ done: boolean; id?: string; name?: string; agent?: CodingAgent }> => {
     const r = (await backend()).gateway.claimStatus(token)
     return r ? { done: true, id: r.loopId, name: r.name, agent: r.agent } : { done: false }
+  })
+
+/** Poll the agent-reported creation milestones for a claim (best-effort live
+ *  checklist in the onboarding wizard). Never authoritative — `claimStatus.done`
+ *  is the real completion signal; this only drives which steps are lit. */
+export const claimProgress = createServerFn({ method: 'GET' })
+  .validator((token: string) => token)
+  .handler(async ({ data: token }): Promise<{ steps: string[] }> => {
+    await backend()
+    const { readClaimProgress } = await import('../gateway/tokens.js')
+    return { steps: readClaimProgress(token) }
+  })
+
+/** The onboarding "first run" wait-state for a just-created loop. READS the loop's
+ *  first exec run (kicked off immediately at creation) + its machine presence and
+ *  derives running/done/scheduled — the wizard waits on `done` to hand off into the
+ *  Loop page. Zero code-exec: never triggers a run, only reads rows. */
+export const firstRunStatus = createServerFn({ method: 'GET' })
+  .validator((loopId: string) => loopId)
+  .handler(async ({ data: loopId }): Promise<{ state: FirstRunState; runId?: string; scheduledHint?: string }> => {
+    await backend()
+    const { firstRunStateFrom } = await import('../lib/firstRun.js')
+    const { cronText } = await import('../lib/format.js')
+    const owned = await ownedLoop(loopId)
+    if (!owned) return { state: 'scheduled' }
+    const loop = owned.loop
+    const run = await store.lastExecRun(loopId)
+    const machine = loop.machineId ? await store.getMachine(loop.machineId) : undefined
+    const state = firstRunStateFrom({ phase: run?.phase ?? null, hasRun: !!run, machineOnline: !!machine?.online })
+    if (state === 'scheduled') return { state, scheduledHint: cronText(loop.cron) }
+    return { state, runId: run?.id }
   })
