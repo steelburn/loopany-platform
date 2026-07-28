@@ -425,6 +425,104 @@ export interface TemplateInfo {
    *  and trusted) - a mock screenshot of what the loop produces, drawn with the
    *  theme's CSS variables so it follows light/dark for free. */
   thumb?: string
+  /** Editorial rating (merged in from the ratings table, `server/templateRatings.ts`)
+   *  shown on the public template list. Optional so a brand-new template without a
+   *  rating still renders; the registry test asserts every shipped template has one. */
+  rating?: TemplateRating
+}
+
+/** How much setup/context a new user needs before the loop delivers. */
+export type TemplateEase = 'easy' | 'moderate' | 'advanced'
+/** How often the loop fires / how long a full cycle takes: short-cycle (daily-ish) vs
+ *  long-cycle (weekly+). */
+export type TemplateCadence = 'short' | 'long'
+/** The loop's mechanism — reuses the catalog's open/closed distinction (an OPEN loop is
+ *  an ongoing monitor; a CLOSED loop is goal-bound and finishes itself). The "Others"
+ *  category templates are the closed kind. */
+export type TemplateMechanism = 'open' | 'closed'
+/** How quickly the user sees value: from the first run, over the first several runs, or
+ *  compounding over weeks (or only when it fires). */
+export type TemplateVisibility = 'first-run' | 'few-runs' | 'compounds'
+
+/**
+ * Editorial per-template ratings shown on the public template list (round 6). Three
+ * dimensions the captain asked for: ease of getting started, cycle & mechanism (cadence
+ * + open/closed), and effect visibility (a bucket plus an honest one-line note). Assigned
+ * by hand from each template's real mechanics — kept honest, not everything is easy /
+ * high-impact. The single source is `server/templateRatings.ts`.
+ */
+export interface TemplateRating {
+  ease: TemplateEase
+  cadence: TemplateCadence
+  mechanism: TemplateMechanism
+  visibility: TemplateVisibility
+  /** One honest line on when/how the value shows (hover / detail copy). English only. */
+  visibilityNote: string
+  /** Humanized cadence for the detail view's mechanism rows — the schedule the template
+   *  actually suggests in its prompt (e.g. "Daily · ~6am", "Weekly · Mon"), since a
+   *  template has no fixed cron until you create the loop. English only. */
+  schedule: string
+  /** For a CLOSED loop only: the concrete finish condition it completes on. Absent for
+   *  open (monitor) loops, which run indefinitely. */
+  exitCondition?: string
+}
+
+/** The accent color a bundle tints its dot + CTA with — one of the app's
+ *  `--color-<accent>` CSS-var tokens (so light/dark follows the theme for free).
+ *  `secondary` is the neutral tint for the catch-all "Others" category; `rubik-yellow`
+ *  is a LIGHT accent (the carousel uses dark CTA text for it — see BundleCarousel).
+ *  Deliberately NO red/orange-alarm accent: categories never read as an error state
+ *  (`indigo` is the calm hue for Ship with Confidence). */
+export type BundleAccent =
+  | 'interactive'
+  | 'indigo'
+  | 'rubik-green'
+  | 'rubik-orange'
+  | 'rubik-yellow'
+  | 'secondary'
+
+/**
+ * A bundle META (the static `skill/bundles/<name>/meta.json`): a curated grouping of
+ * templates by name. `templates` is the member ORDER; the registry resolves each name
+ * to its `TemplateInfo`. Pure content — adding a bundle is dropping a meta.json, mirror
+ * of the template system.
+ */
+export interface BundleInfo {
+  name: string
+  label: string
+  /** One-line pitch shown under the bundle name in the carousel. */
+  tagline: string
+  accent: BundleAccent
+  /** Member template names, in display order. */
+  templates: string[]
+  /** When true this is a CATEGORY of loops that must be set up individually (the
+   *  "Others" bucket): the carousel renders NO "Try this bundle" CTA for it — only the
+   *  click-a-loop-to-set-it-up-alone affordance. Absent/false ⇒ a normal tryable bundle. */
+  individual?: boolean
+}
+
+/** A bundle with its member templates RESOLVED (unknown names dropped), as the
+ *  dashboard carousel + the bundle Copy-prompt path consume it. */
+export interface BundleView {
+  name: string
+  label: string
+  tagline: string
+  accent: BundleAccent
+  members: TemplateInfo[]
+  /** True ⇒ an individually-set-up category (no bundle CTA). See `BundleInfo`. */
+  individual?: boolean
+}
+
+/**
+ * ONE resolved market template plus its category context — what the public detail route
+ * (`/templates/<slug>`) renders. Resolved server-side BY SLUG (`server/bundles.ts`
+ * `findPublicTemplate`) so a card hover under `defaultPreload: 'intent'` fetches this one
+ * template, never the whole catalog. Thumb-stripped like the rest of the public payload.
+ */
+export interface TemplateDetailView {
+  template: TemplateInfo
+  categoryLabel: string
+  accent: BundleAccent
 }
 
 /** The team switcher's data: the teams this user may view + the active selection. */

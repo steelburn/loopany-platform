@@ -20,7 +20,9 @@ import type {
   MutationResult,
   RunDiffResult,
   RunSummary,
+  BundleView,
   TeamsView,
+  TemplateDetailView,
   TemplateInfo,
   TimelineData,
   TimelineMark,
@@ -35,6 +37,11 @@ import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
 import { projectFires, projectedMark, runToMark, sumCosts, timelineMachines, toTimelineLoop } from './timeline.js'
 import { TEMPLATES } from './templates.js'
+import {
+  findPublicTemplate as findPublicTemplateRegistry,
+  listBundles as listBundlesRegistry,
+  publicBundles as publicBundlesRegistry,
+} from './bundles.js'
 
 function backend() {
   return ensureServer()
@@ -298,6 +305,31 @@ export const listTemplates = createServerFn({ method: 'GET' }).handler((): Templ
   // as cards beside "New Loop". Metadata only — the description rides the snippet.
   return TEMPLATES
 })
+
+export const listBundles = createServerFn({ method: 'GET' }).handler((): BundleView[] => {
+  // The file-based bundle registry (server/bundles.ts): curated groupings of templates
+  // shown as the dashboard's auto-playing bundle carousel. Members are resolved
+  // TemplateInfos — static per deploy, seeded by the route loader (never re-polled).
+  return listBundlesRegistry()
+})
+
+export const listPublicBundles = createServerFn({ method: 'GET' }).handler((): BundleView[] => {
+  // The PUBLIC market payload (`/templates` + `/templates/<slug>`): the same registry
+  // MINUS each template's inlined thumb.svg (server/bundles.ts `publicBundles`). Those
+  // pages are text-first and SSR, so the SVGs would be dead weight in every public
+  // document; stripping server-side means a client navigation doesn't ship them either.
+  return publicBundlesRegistry()
+})
+
+export const getPublicTemplate = createServerFn({ method: 'GET' })
+  .validator((slug: string) => slug)
+  .handler(({ data }): TemplateDetailView | null => {
+    // ONE template + its category context, resolved by slug server-side. The public
+    // detail route preloads on card hover (`defaultPreload: 'intent'`), so resolving a
+    // slug must cost one small payload, not the whole catalog. Unknown slug ⇒ null; the
+    // route turns that into a real 404.
+    return findPublicTemplateRegistry(data)
+  })
 
 // ---- writes (apply via the live in-process Scheduler) ----
 

@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
  * route must carry a retryable errorComponent for the first-load failure case.
  */
 // The route file keeps only the loader + errorComponent; the dashboard BODY (poll,
-// switcher, template fan) moved to the shared DashboardView (rendered by both `/`
+// switcher, bundle carousel) moved to the shared DashboardView (rendered by both `/`
 // in open mode and `/t/$teamId`), so the body guards read from there.
 const src = readFileSync(fileURLToPath(new URL('./index.tsx', import.meta.url)), 'utf8')
 const teamRoute = readFileSync(fileURLToPath(new URL('./t.$teamId.tsx', import.meta.url)), 'utf8')
@@ -21,6 +21,7 @@ const view = readFileSync(
   fileURLToPath(new URL('../components/DashboardView.tsx', import.meta.url)),
   'utf8',
 )
+const appCss = readFileSync(fileURLToPath(new URL('../styles/app.css', import.meta.url)), 'utf8')
 const switcher = readFileSync(
   fileURLToPath(new URL('../components/TeamSwitcher.tsx', import.meta.url)),
   'utf8',
@@ -63,28 +64,67 @@ describe('dashboard poll resilience', () => {
   })
 })
 
-describe('dashboard template fan layout', () => {
-  it('fan cards wrap and stay fixed-width - no template count may widen the page', () => {
-    // The hero template fan grows with the registry. Per the
-    // no-page-level-horizontal-scroll rule each fan ROW must WRAP at narrow
-    // widths (flex-wrap on the row container) and each card is a fixed narrow
-    // width (w-[..px] shrink-0), so no count of templates can overflow the
-    // viewport - extra cards fold into a second row instead.
-    const fan = /<div key=\{r\} className="flex flex-wrap[^"]*">[\s\S]*?row\.map/.exec(view)?.[0]
-    expect(fan, 'the wrapping fan row should contain the template cards').toBeTruthy()
-    const card = /row\.map\([\s\S]*?className="([^"]*)"/.exec(view)?.[1]
-    expect(card, 'the template card should have a className').toBeTruthy()
-    expect(card).toMatch(/\bw-\[\d+px\]/)
-    expect(card).toContain('shrink-0')
+const carousel = readFileSync(
+  fileURLToPath(new URL('../components/BundleCarousel.tsx', import.meta.url)),
+  'utf8',
+)
+
+describe('dashboard bundle carousel', () => {
+  it('renders the BundleCarousel in the hero, not the old fan/dial/shelf', () => {
+    // Round 3: a plain auto-playing carousel (one bundle at a time), NOT the round-1
+    // rotating disc nor the round-2 all-at-once shelf.
+    expect(view).toContain('<BundleCarousel')
+    expect(view).not.toContain('TemplateFan')
+    expect(view).not.toContain('BundleDial')
+    expect(view).not.toContain('BundleShelf')
+    // Seeded from the loader's static-per-deploy bundles (never re-polled).
+    expect(view).toContain('bundles={bundles}')
   })
 
-  it('splits 6+ templates into balanced rows - smaller row on top, never an orphan', () => {
-    // The fan pre-splits into balanced rows (up to 5 per row) instead of letting
-    // flex-wrap decide the break point. floor-first puts the SMALLER row on top,
-    // so 9 templates lay out as 4 over 5 (not a lopsided 5/4 or a cramped 3x3),
-    // and the last (largest) row always absorbs the remainder - never an orphan.
-    expect(view).toMatch(/templates\.length <= 5 \? 1 : Math\.ceil\(templates\.length \/ 5\)/)
-    // Remaining cards divide across remaining rows, floor-first (9 -> 4/5, 7 -> 3/4).
-    expect(view).toMatch(/Math\.floor\(\(templates\.length - at\) \/ \(rowCount - r\)\)/)
+  it('ships the template registry ONCE — bundles embed every member, so no second listTemplates', () => {
+    // `listBundles()` already carries every TemplateInfo (thumb SVGs included); fetching
+    // the flat list too duplicated ~90KB on every dashboard load and team switch.
+    for (const s of [src, teamRoute]) expect(s).not.toContain('listTemplates')
+    expect(view).not.toContain('templates: TemplateInfo[]')
+    // The market deep-link resolves out of the bundles instead.
+    expect(view).toContain('bundles.flatMap((b) => b.members)')
+  })
+
+  it('is a PLAIN slide carousel — a clipped viewport + translated track, no dial/spin', () => {
+    // No page scroll: the viewport clips off-screen slides. No leftover rotating-disc
+    // machinery (round-1 dial) survives in the stylesheet.
+    const vp = /\.bundle-carousel-viewport\s*\{[\s\S]*?\}/.exec(appCss)?.[0]
+    expect(vp, 'the .bundle-carousel-viewport rule should exist').toBeTruthy()
+    expect(vp).toContain('overflow: hidden')
+    expect(appCss).not.toContain('.dial-')
+    expect(appCss).not.toMatch(/@property\s+--rot/)
+  })
+
+  it('auto-plays but honours reduced-motion and pauses on interaction', () => {
+    // Auto-advance on an interval, disabled under reduced-motion and while paused
+    // (hover/focus) or stopped (after a manual nav).
+    expect(carousel).toContain('setInterval')
+    expect(carousel).toContain('prefers-reduced-motion')
+    expect(carousel).toMatch(/const autoplaying =[^\n]*!reduced[^\n]*!stopped/)
+    // The slide tween is disabled under reduced-motion at the CSS layer.
+    expect(appCss).toMatch(/prefers-reduced-motion[\s\S]*?\.bundle-carousel-track\s*\{\s*transition:\s*none/)
+  })
+
+  it('wraps the loop-card fan in rows of up to three WITHIN a bundle (3->[3], 4->[3,1], 5->[3,2])', () => {
+    // The fill-first rule applies to the fanned loop cards inside one bundle (data-driven
+    // splitRows, filling each row of up to 3 so the larger rows sit on top).
+    expect(carousel).toContain('splitRows(bundle.members, 3)')
+    expect(carousel).toMatch(/for \(let i = 0; i < items\.length; i \+= maxPerRow\)/)
+    // Fan rows wrap so no loop count can widen the page.
+    expect(carousel).toContain('flex flex-wrap')
+  })
+
+  it('CTA is exactly "Try this bundle" (no icons/prefix) and skipped for Others', () => {
+    expect(carousel).toContain('Try this bundle')
+    expect(carousel).not.toContain('Copy prompt · try this bundle')
+    // The individually-set-up category renders no bundle CTA.
+    expect(carousel).toContain('!bundle.individual &&')
+    // The single-loop affordance stays.
+    expect(carousel).toContain('or click a loop to set it up alone')
   })
 })

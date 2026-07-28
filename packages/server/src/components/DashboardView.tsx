@@ -3,9 +3,10 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { Tooltip } from '@base-ui/react/tooltip'
 import { listJobs, listMyTeams } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
-import type { JobSummary, MachineSummary, RunSummary, TeamsView, TemplateInfo } from '../types'
+import type { BundleView, JobSummary, MachineSummary, RunSummary, TeamsView, TemplateInfo } from '../types'
 import { isCompleted } from '../lib/format'
 import { LoopCard } from './LoopCard'
+import { BundleCarousel } from './BundleCarousel'
 import { TeamSwitcher } from './TeamSwitcher'
 import { MachinesModal } from './MachinesModal'
 import { NotificationsModal } from './NotificationsModal'
@@ -17,17 +18,21 @@ import { LoopPlaybook } from './LoopPlaybook'
 import { DISCORD_URL, DiscordIcon, GITHUB_URL, GitHubIcon } from './SocialLinks'
 
 /** The seed the route loader hands the dashboard: the live fan-out plus the
- *  static-per-deploy templates. Both `/` (open mode) and `/t/<id>` render from it. */
+ *  static-per-deploy bundles. Both `/` (open mode) and `/t/<id>` render from it. */
 export interface DashboardData {
   jobs: JobSummary[]
-  templates: TemplateInfo[]
+  /** Curated template groupings for the carousel. Each bundle embeds its resolved
+   *  members, so this IS the template registry — seeded from the route loader only,
+   *  never re-shipped on the poll (and never fetched a second time as a flat list). */
+  bundles: BundleView[]
   machines: MachineSummary[]
   teams: TeamsView | undefined
 }
 
-/** The LIVE data fan-out - jobs/machines/teams change between polls. Templates
- *  are static per deploy (a compile-time registry), so only the route loader
- *  fetches them; the poll must not re-ship the thumb SVGs every 3-10s.
+/** The LIVE data fan-out - jobs/machines/teams change between polls. Bundles
+ *  (and the templates they embed) are static per deploy (a compile-time registry),
+ *  so only the route loader fetches them; the poll must not re-ship the thumb SVGs
+ *  every 3-10s.
  *
  *  `teamId` (the `/t/<id>` route's team, in id form or undefined in open mode)
  *  scopes every list fn EXPLICITLY - so a tab on /t/A and one on /t/B show
@@ -48,28 +53,55 @@ export async function fetchLiveData(teamId?: string) {
  * URL's team (multi-tab safe). The route mounts it with `key={teamId}` so a
  * team switch (a `/t/<id>` navigation) re-seeds state from the new loader data.
  */
-export function DashboardView({ teamId, initial }: { teamId?: string; initial: DashboardData }) {
+export function DashboardView({
+  teamId,
+  initial,
+  openTemplate,
+}: {
+  teamId?: string
+  initial: DashboardData
+  /** A template NAME deep-linked from the public market (`/?template=<name>`): on mount
+   *  the compose modal opens preselected on it, reusing the exact single-template flow
+   *  the carousel uses — no parallel creation path. Ignored if it matches no template. */
+  openTemplate?: string
+}) {
   // Loader data seeds the page; the poll refreshes via fetch-then-set below
   // (never router.invalidate — a loader re-run throws the whole page on a blip),
   // so this state is the single source the page renders from.
   const [data, setData] = useState(() => ({
     jobs: initial?.jobs ?? [],
-    templates: initial?.templates ?? [],
+    bundles: initial?.bundles ?? [],
     machines: initial?.machines ?? [],
     teams: initial?.teams,
   }))
-  const { jobs, templates, machines, teams } = data
+  const { jobs, bundles, machines, teams } = data
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
-  // Compose carries an optional template: null = blank New Loop; a TemplateInfo =
-  // a canned intent picked from the cards (ComposeModal appends its description).
-  const [compose, setCompose] = useState<{ open: boolean; template: TemplateInfo | null }>({
+  // Compose carries an optional template OR bundle: both null = blank New Loop; a
+  // TemplateInfo = a single canned intent (ComposeModal appends its description); a
+  // BundleView = a whole bundle (ComposeModal builds the multi-loop candidate menu).
+  // At most one of template/bundle is set.
+  const [compose, setCompose] = useState<{ open: boolean; template: TemplateInfo | null; bundle: BundleView | null }>({
     open: false,
     template: null,
+    bundle: null,
   })
   const [machinesOpen, setMachinesOpen] = useState(false)
   const [notifyOpen, setNotifyOpen] = useState(false)
   const [teamsOpen, setTeamsOpen] = useState(false)
+
+  // Deep-link from the public market: open the single-template compose preselected on
+  // `openTemplate` once (guarded so the 3-10s poll re-render never reopens it). The
+  // template object is resolved from the loader's bundles — they partition the whole
+  // registry (pinned by bundles.test.ts), so it carries the same shape the carousel passes.
+  const deepLinkedRef = useRef(false)
+  useEffect(() => {
+    if (deepLinkedRef.current || !openTemplate) return
+    const t = bundles.flatMap((b) => b.members).find((x) => x.name === openTemplate)
+    if (!t) return
+    deepLinkedRef.current = true
+    setCompose({ open: true, template: t, bundle: null })
+  }, [openTemplate, bundles])
 
   // Silent background refresh — fetch-then-set (like the detail pages), NOT
   // router.invalidate: invalidate re-runs the loader, whose Promise.all THROWS
@@ -79,7 +111,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
   const refetch = useCallback(async () => {
     try {
       const live = await fetchLiveData(teamId)
-      // Keep the loader's templates - static per deploy, never re-polled.
+      // Keep the loader's bundles - static per deploy, never re-polled.
       setData((prev) => ({ ...prev, ...live }))
     } catch {
       /* keep what we have; the next tick retries */
@@ -159,7 +191,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
             {online} {online === 1 ? 'machine' : 'machines'} online
           </button>
           <button
-            onClick={() => setCompose({ open: true, template: null })}
+            onClick={() => setCompose({ open: true, template: null, bundle: null })}
             className="inline-flex shrink-0 cursor-pointer items-center rounded-full bg-display px-3.5 py-1.5 text-meta font-medium text-paper transition-opacity hover:opacity-85"
           >
             New Loop
@@ -174,24 +206,25 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         <div className="pt-6">
           <OnboardingEntry teamId={teamId} noLoops={jobs.length === 0} noMachines={machines.length === 0} />
         </div>
-        {/* Hero - invite creation first (serif = the one editorial moment),
-            then the template fan, then a prominent blank-loop entry. */}
+        {/* Hero - invite creation first (serif = the one editorial moment), then the
+            auto-playing bundle carousel, then a prominent blank-loop entry. */}
         <section className="pb-2 pt-14 text-center">
           <h1 className="font-pixel text-[clamp(28px,4.5vw,38px)] leading-[1.15] text-display">
             What should happen while you sleep?
           </h1>
-          {templates.length > 0 && (
-            <>
-              <div className="mb-5 mt-2 text-body text-secondary">Start with a template…</div>
-              <TemplateFan templates={templates} onPick={(t) => setCompose({ open: true, template: t })} />
-            </>
+          {bundles.length > 0 && (
+            <BundleCarousel
+              bundles={bundles}
+              onPickTemplate={(t) => setCompose({ open: true, template: t, bundle: null })}
+              onTryBundle={(b) => setCompose({ open: true, template: null, bundle: b })}
+            />
           )}
           <div className="mt-7">
             <button
-              onClick={() => setCompose({ open: true, template: null })}
+              onClick={() => setCompose({ open: true, template: null, bundle: null })}
               className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-display px-6 py-2.5 text-body font-medium text-paper transition-opacity hover:opacity-85"
             >
-              {templates.length ? 'Start a blank loop' : 'Start your first loop'}
+              {bundles.length ? 'Start a blank loop' : 'Start your first loop'}
               <span aria-hidden>→</span>
             </button>
           </div>
@@ -213,7 +246,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
             </div>
             {!jobs.length && (
               <div className="mt-1.5 text-body text-disabled">
-                Pick a template above, or start a blank loop.
+                Pick a bundle above, or start a blank loop.
               </div>
             )}
           </div>
@@ -233,14 +266,15 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
 
         {/* The playbook band - static education/sales content anchoring the page;
             its CTA is the same blank-loop compose as the hero button. */}
-        <LoopPlaybook onStart={() => setCompose({ open: true, template: null })} />
+        <LoopPlaybook onStart={() => setCompose({ open: true, template: null, bundle: null })} />
       </main>
 
       <ComposeModal
         open={compose.open}
         template={compose.template}
+        bundle={compose.bundle}
         teamId={teamId}
-        onClose={() => setCompose({ open: false, template: null })}
+        onClose={() => setCompose({ open: false, template: null, bundle: null })}
         onCreated={refresh}
       />
 
@@ -260,103 +294,3 @@ const headerBtn =
 /* Icon-only variant for the GitHub/Discord links. */
 const headerIconBtn =
   'inline-flex shrink-0 cursor-pointer items-center rounded-full p-1.5 text-secondary transition-colors hover:bg-raised hover:text-display'
-
-/**
- * The template fan - a hand of tilted cards (tilt/lift computed from each
- * card's offset from its ROW's center). Up to 5 cards stay a single hand;
- * more split into balanced rows of at most 4 (7 -> 4/3, 9 -> 3/3/3), so no
- * count can flex-wrap into one orphan card stranded under a full row.
- * Hover/focus straightens a card via the `.fan-card` rules in app.css.
- * One click carries the template into ComposeModal, same as the old flat cards.
- */
-function TemplateFan({
-  templates,
-  onPick,
-}: {
-  templates: TemplateInfo[]
-  onPick: (t: TemplateInfo) => void
-}) {
-  // Up to 5 cards per row, and the SMALLER row on top (floor-first) so 9 templates
-  // lay out as 4 over 5, not a lopsided 5 over 4 or a cramped 3x3 fan.
-  const rowCount = templates.length <= 5 ? 1 : Math.ceil(templates.length / 5)
-  const rows: TemplateInfo[][] = []
-  for (let r = 0, at = 0; r < rowCount; r++) {
-    const size = Math.floor((templates.length - at) / (rowCount - r))
-    rows.push(templates.slice(at, at + size))
-    at += size
-  }
-  return (
-    <div className="pb-3 pt-1">
-      {rows.map((row, r) => {
-        const center = (row.length - 1) / 2
-        return (
-          <div key={r} className="flex flex-wrap items-start justify-center">
-            {row.map((t, i) => {
-              const off = i - center
-              return (
-                <button
-                  key={t.name}
-                  type="button"
-                  onClick={() => onPick(t)}
-                  title={t.desc}
-                  className="fan-card relative w-[196px] shrink-0 cursor-pointer rounded-card border border-hairline bg-surface p-3 text-left shadow-[0_12px_28px_-16px_rgba(0,0,0,0.25)] outline-none focus-visible:ring-2 focus-visible:ring-interactive"
-                  style={
-                    {
-                      '--tilt': `${off * 3.5}deg`,
-                      '--lift': `${Math.abs(off) * 7}px`,
-                      marginInline: row.length > 1 ? '-5px' : undefined,
-                    } as React.CSSProperties
-                  }
-                >
-                  {t.thumb ? (
-                    // The preview is a repo-authored thumb.svg inlined by the registry
-                    // (trusted content, same trust boundary as the skill markdown);
-                    // inline so it inherits the theme's CSS variables.
-                    <span
-                      className="block overflow-hidden rounded-control bg-raised [&_svg]:block [&_svg]:h-auto [&_svg]:w-full"
-                      dangerouslySetInnerHTML={{ __html: t.thumb }}
-                    />
-                  ) : (
-                    // Fallback for a template folder that ships no thumb.svg yet.
-                    <span className="flex h-[76px] items-center justify-center rounded-control bg-raised text-secondary">
-                      <LoopGlyph />
-                    </span>
-                  )}
-                  <span className="mt-2.5 block truncate text-center text-meta font-semibold text-primary">{t.label}</span>
-                  {/* Fixed three-line well (clamp + min-h) so every card in the fan is
-                      the same height regardless of how chatty a template's desc is -
-                      the full text lives in the hover title + the compose modal.
-                      NOTE: no `block` here - display:block would override the
-                      -webkit-box that line-clamp needs. */}
-                  <span className="mt-0.5 line-clamp-3 min-h-[45px] text-center text-caption leading-snug text-secondary">
-                    {t.desc}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-/** A circular-arrow "loop" mark - one glyph for every template, tinted per card. */
-function LoopGlyph() {
-  return (
-    <svg
-      aria-hidden
-      width="30"
-      height="30"
-      viewBox="0 0 30 30"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M25.5 15a10.5 10.5 0 1 1-3.1-7.4" />
-      <path d="M25.5 3.5v5.2h-5.2" />
-    </svg>
-  )
-}
