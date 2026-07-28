@@ -211,6 +211,41 @@ computes pure functions. Run instructions: `README.md`.
   `/?template=<name>`, which is forwarded through the gated `/t/<team>` redirect and
   preserved across OAuth via `callbackURL`, then reuses the EXISTING single-template
   compose through `DashboardView.openTemplate` - never a parallel creation path.
+- **The market CARD is ONE shared component** (`components/TemplateCard.tsx`:
+  `TemplateCard` + `flattenBundles` + `promptPreview`), rendered by THREE surfaces:
+  `/templates`, and the catalog teaser `components/TemplatesPreview.tsx` on BOTH the
+  dashboard and the pre-login landing. The teaser curates ROUND-ROBIN across bundles
+  (every bundle's lead first in curated category order, then every bundle's second, ...)
+  to `PREVIEW_COUNT = 9` = three desktop rows under `.templates-peek`, a fixed
+  `max-height` + bottom mask: TWO rows solid, the THIRD under the fade, then "Browse all
+  N templates" (N = the WHOLE catalog, not the 9). The card height (218px), the box
+  (558px) and the mask stop (81% = (2*218 + 16px gap)/558) are COUPLED - change one,
+  change all three (pinned by `TemplatesPreview.test.ts`). Because the clip is a fixed
+  pixel height, `PEEK_VISIBILITY` `display: none`s the cards a narrower column count
+  would push entirely under it (3 cards at 1 column, 6 at 2, all 9 at `lg`), so no
+  invisible card stays focusable/AT-exposed; the box uses `overflow-clip`, not `hidden`,
+  so it is never a scroll container. Data source differs by surface: the dashboard passes the
+  loader's static `bundles` (never re-polled), while `SignIn` fetches `listPublicBundles`
+  itself (thumb-stripped, public) rather than threading it through the eight gated routes
+  that render it - best-effort, since an empty registry renders no band.
+- **The pre-login landing IS `components/SignIn.tsx`** (`SignIn.landing.test.ts`): value
+  line + Continue-with-GitHub, then the template teaser, then the playbook - not a bare
+  card. Every gated route renders it signed-out, so a change here is the signed-out
+  experience everywhere; both bands' CTAs scroll back to the sign-in card. Reviewing it
+  locally needs the GATE ON - `GITHUB_CLIENT_ID`/`_SECRET` (any non-empty value; see
+  `lib/loginGate.ts`) plus `LOOPANY_AUTH_SECRET`, or the app boots open-mode and lands
+  straight on the dashboard.
+- **Per-template FLOW SPECS live in `lib/templateFlow.tsx`** (extracted from
+  `components/LoopFlow.tsx`, which now imports them): ONE source, two surfaces - the
+  compose modal's animated vertical preview (`LoopFlow`, `hasLoopFlow`) and the public
+  detail page's STATIC diagram (`components/TemplateFlowDiagram.tsx` on
+  `/templates/<slug>`). The static one is DERIVED, never a second hand-authored list:
+  `templateFlowDiagram(name)` folds a `FlowSpec` into trigger -> steps -> outputs (steps
+  from `nodes`, the `setup` gate split off, `closes` from a `finish` node, outputs from
+  the dashboard WIDGETS the loop maintains, typed by widget kind). It must stay
+  hook-free/measurement-free - that route SSRs for crawlers, and the guard test pins it.
+  A template with no spec renders NEITHER surface (9 of 21 have one); add a spec rather
+  than invent a flow.
 - **Editorial ratings** (`server/templateRatings.ts`, one typed table merged onto
   `TemplateInfo.rating`) drive the market's rating chips and the detail view's mechanism
   rows: ease, cadence + mechanism, effect visibility, plus a humanized `schedule` and -
@@ -240,11 +275,12 @@ computes pure functions. Run instructions: `README.md`.
   thumbnail, hand-drawn in the dashboard/flow visual language (data-mock/flow art on theme
   vars, any brand logo in its real color - NOT a centered icon); the carousel renders it,
   the public market does not. (5) OPTIONAL **loop-flow
-  + dashboard PREVIEW** — a `FlowSpec` registered in `components/LoopFlow.tsx` `FLOWS` (nodes +
+  + dashboard PREVIEW** — a `FlowSpec` registered in `lib/templateFlow.tsx` `FLOWS` (nodes +
   dashboard widgets, pure data; `hasLoopFlow(name)` flips the modal to its two-column layout
-  and renders the Loop-flow / Dashboard tabs). **The LOOP FLOW and the DASHBOARD are the CARD
-  VISUAL in (5) + what create.md/`reference.md` actually author — NOT sections the paste-prompt
-  must enumerate.**
+  and renders the Loop-flow / Dashboard tabs; the SAME spec draws the public detail page's
+  static diagram - see the flow-spec bullet above). **The LOOP FLOW and the DASHBOARD are
+  the CARD VISUAL in (5) + what create.md/`reference.md` actually author — NOT sections the
+  paste-prompt must enumerate.**
 - **The shipping catalog is the folder list under `skill/templates/`** (21 across the 6
   bundles); each template's defining behaviors are owned by its own `meta.json`
   `description` and pinned per-template by `templates.test.ts` - read those, never a
@@ -778,7 +814,13 @@ computes pure functions. Run instructions: `README.md`.
 - **Hard rule: no page-level horizontal scroll.** `min-w-0` on every grid/flex child;
   wide content scrolls inside its own pane (dashboard `overflow-x-auto`, `.taskmd
   table` as a scrolling block, `Timeline` row `min-w-0 overflow-x-auto`). Guarded by
-  the `*.regression.test.ts` files - keep them green.
+  the `*.regression.test.ts` files - keep them green. NB the dashboard HEADER still
+  overflows below ~690px (its shrink-0 button row); pre-existing, not the content grid.
+- **Source-reading test guards must keep the path in a VARIABLE**:
+  `readFileSync(fileURLToPath(new URL(rel, import.meta.url)))`. Vite statically rewrites
+  the LITERAL `new URL('./x.tsx', import.meta.url)` form into an asset URL
+  (`http://localhost:3000/...`), which `fileURLToPath` then rejects with "The URL must be
+  of scheme file". Every guard in the repo uses the variable form - copy it, don't inline.
 - Dashboard generative-UI primitives are `loop-embed`/`loop-calendar`/`loop-kanban`
   (registry in `LoopView.tsx`; `loop-kanban` in `components/LoopKanban.tsx` is a
   collection view grouping front-matter-`type`d markdown artifacts into columns -
