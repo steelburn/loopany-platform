@@ -239,6 +239,15 @@ export function PublicHeader() {
         <a href={DISCORD_URL} target="_blank" rel="noreferrer" aria-label="Discord community" title="Discord" className={headerIconBtn}>
           <DiscordIcon className="size-[17px]" />
         </a>
+        {/* Community CTA: contributing a template is a PR today — link the folder. */}
+        <a
+          href={`${GITHUB_URL}/tree/main/packages/server/src/skill/templates`}
+          target="_blank"
+          rel="noreferrer"
+          className="hidden shrink-0 cursor-pointer items-center gap-1 rounded-full border border-wire bg-surface px-3.5 py-1.5 text-meta font-medium text-primary transition-colors hover:bg-raised sm:inline-flex"
+        >
+          List your loop <span aria-hidden>↗</span>
+        </a>
         <Link
           to="/"
           className="inline-flex shrink-0 cursor-pointer items-center rounded-full bg-display px-3.5 py-1.5 text-meta font-medium text-paper transition-opacity hover:opacity-85"
