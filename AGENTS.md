@@ -220,7 +220,11 @@ computes pure functions. Run instructions: `README.md`.
   `<details>`, SSR-safe), and optional "Field notes" — a repo-authored
   `skill/templates/<name>/story.md` (real results/learnings write-up) attached ONLY by
   `findPublicTemplate` (never on list payloads) and rendered through marked WITHOUT
-  DOMPurify (trusted repo content, and DOMPurify needs a DOM the SSR pass lacks);
+  DOMPurify (trusted repo content, and DOMPurify needs a DOM the SSR pass lacks). Story
+  MEDIA lives in `public/template-assets/<name>/` (nitro serves `public/` verbatim in
+  dev AND prod; `templateStory` rewrites relative `assets/<file>` refs to
+  `/template-assets/<name>/…`) — deliberately NOT Vite `?url` assets, whose SSR-emitted
+  `/assets/<hash>` URLs the nitro build never serves (the 2026-07-29 prod 404s);
   RIGHT = the sticky verbatim prompt + Copy. Its CTA deep-links
   `/?template=<name>`, which is forwarded through the gated `/t/<team>` redirect and
   preserved across OAuth via `callbackURL`, then reuses the EXISTING single-template
@@ -230,18 +234,18 @@ computes pure functions. Run instructions: `README.md`.
   fed by `rating.schedule`/`does`/`outcome` - `server/templateRatings.ts` owns those 21
   copy lines), rendered by THREE surfaces:
   `/templates`, and the catalog teaser `components/TemplatesPreview.tsx` on BOTH the
-  dashboard and the pre-login landing. The teaser curates ROUND-ROBIN across bundles
-  (every bundle's lead first in curated category order, then every bundle's second, ...)
-  to `PREVIEW_COUNT = 9` = three desktop rows under `.templates-peek`, a fixed
-  `max-height` + bottom mask: TWO rows solid, the THIRD under the fade, then "Browse all
-  N templates" (N = the WHOLE catalog, not the 9). The card height (252px), the box
-  (642px) and the mask stop (81% = (2*252 + 16px gap)/642) are COUPLED - change one,
-  change all three (pinned by `TemplatesPreview.test.ts`, which derives the formula from
-  source - so it fails on any one-sided change). Because the clip is a fixed
-  pixel height, `PEEK_VISIBILITY` `display: none`s the cards a narrower column count
-  would push entirely under it (3 cards at 1 column, 6 at 2, all 9 at `lg`), so no
-  invisible card stays focusable/AT-exposed; the box uses `overflow-clip`, not `hidden`,
-  so it is never a scroll container. Data source differs by surface: the dashboard passes the
+  dashboard and the pre-login landing. The teaser opens with the SAME typed hero as the
+  market (`AgentLoopsHeadline`, exported from `TemplatesPage` — compact size for the
+  band) and previews the FIRST `PREVIEW_COUNT = 9` templates in the CATALOG's own
+  curated bundle order (Growth first — the same sequence the market shows, never a
+  re-curated shuffle) = three desktop rows under `.templates-peek`, a fixed `max-height` + bottom mask: TWO rows
+  solid, the THIRD under the fade, then "Browse all N templates" (N = the WHOLE
+  catalog). The card height (252px), the box (642px) and the mask stop (81%) are
+  COUPLED — change one, change all three (pinned by `TemplatesPreview.test.ts`, which
+  derives the formula from source). `PEEK_VISIBILITY` `display: none`s the cards a
+  narrower column count would push entirely under the clip (3/6/9 at 1/2/3 columns);
+  the box uses `overflow-clip`, not `hidden`, so it is never a scroll container.
+  Data source differs by surface: the dashboard passes the
   loader's static `bundles` (never re-polled), while `SignIn` fetches `listPublicBundles`
   itself (thumb-stripped, public) rather than threading it through the eight gated routes
   that render it - best-effort, since an empty registry renders no band.

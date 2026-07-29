@@ -602,42 +602,76 @@ const OUTCOME_WATCH: FlowSpec = {
 }
 
 
-const SEO_SCOUT: FlowSpec = {
+
+const KEYWORD_BETS: FlowSpec = {
   worktreeLabel: 'Isolated git worktree · off main',
   nodes: [
-    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Wire Search Console + the map', detail: 'smoke-test one live pull · breadwinner protected · bot queries tagged' },
-    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Every Mon', detail: 'one bet max · skipping is healthy' },
-    { id: 'verdict', kicker: 'Step 1 · Verdict', glyph: '⚖', title: 'Day-7 verdicts first', detail: 'live daily series · dated · scale or leave' },
-    { id: 'radar', kicker: 'Step 2 · Radar', glyph: '⌕', title: 'Read your own feed', detail: 'bookmarks & communities — not keyword tools' },
-    { id: 'bet', wt: true, kicker: 'Step 3 · Bet', glyph: '✎', title: 'Place one cheap bet', detail: 'one guide + up to 4 supporting pages' },
-    { id: 'ship', wt: true, kicker: 'Step 4 · Ship', glyph: '⑂', title: 'One PR, human merges', detail: 'no new bet while one is open' },
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Fill the template · verify GSC', detail: 'date dimension non-negotiable · bet ledger created' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Weekly · before your review', detail: 'score first, mine second' },
+    { id: 'score', kicker: 'Part A · Score', glyph: '⚖', title: 'Score the daily series', detail: '3-day median · never a trailing window' },
+    { id: 'verdict', kicker: 'Part A · Verdict', glyph: '◈', title: 'Day-7 verdicts', detail: 'SCALE → engine · LEAVE → lesson · report files NOW' },
+    { id: 'mine', kicker: 'Part B · Mine', glyph: '⌕', title: 'Mine one new bet', detail: 'gated · radar-first · watchlist for the unsearchable' },
+    { id: 'ship', wt: true, kicker: 'Part B · Ship', glyph: '⑂', title: 'One seed PR', detail: 'archetype lane or approval lane' },
   ],
   dashboard: [
     {
       type: 'kanban',
       heading: 'Bet board',
-      sub: 'thesis → live → verdict',
+      sub: 'thesis → live → proven',
       columns: [
         ['Live', [
-          ['BET-7', 'context compaction — guide + 4 pages', 'day 5 of 7'],
+          ['BET-9', 'agent handoff patterns — guide + 3 pages', 'day 5 of 7'],
+          ['BET-8', 'prompt-cache budgeting', 'day 2 of 7'],
         ]],
-        ['Scaled', [
-          ['BET-5', 'loop engineering cluster', 'daily loop spun up'],
-          ['BET-6', '"X is dead" displacement page', '295 clicks/wk'],
+        ['Proven', [
+          ['BET-5', 'agent evals field guide', 'handed to the scale loop'],
         ]],
         ['Left', [
-          ['BET-4', 'loops vs graphs', '16 impressions · left'],
+          ['BET-4', 'yaml vs toml configs', '12 impressions · left'],
         ]],
       ],
     },
-    { type: 'metric', label: 'Organic clicks (28d)', series: [112, 340, 820, 2079, 3900, 6900, 10400, 13831], note: 'bets are cheap; the verdicts decide what gets scaled.' },
+    { type: 'metric', label: 'Open bets', series: [0, 1, 2, 2, 1, 2, 2, 1], note: 'capped at 2 — more open bets than your human can merge is batch-crank.' },
+  ],
+}
+
+const KEYWORD_DOUBLE_DOWN: FlowSpec = {
+  worktreeLabel: 'Isolated git worktree · off main',
+  nodes: [
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Earn the engine', detail: 'a day-7 SCALE verdict in the ledger · regime picked' },
+    { id: 'tick', kicker: 'On schedule', glyph: '◷', title: 'Daily · staggered', detail: 'one regime unit per run' },
+    { id: 'reconcile', kicker: 'Step 1 · Reconcile', glyph: '⌕', title: 'Drift + verification ledger', detail: 'live system first · +14d re-checks · REVERT flags' },
+    { id: 'score', kicker: 'Step 2 · Score', glyph: '⚖', title: 'Score the daily series', detail: 'canary + cooldowns · merged is not live' },
+    { id: 'pick', kicker: 'Step 3 · Pick', glyph: '✧', title: 'Pick the regime unit', detail: 'land-grab article · harvest enrichment' },
+    { id: 'ship', wt: true, kicker: 'Step 4 · Ship', glyph: '⑂', title: 'One gated PR', detail: 'cannibalization · CTA · fact-check gates' },
+  ],
+  dashboard: [
+    { type: 'metric', label: 'kpi_clicks_28d', series: [180, 260, 410, 640, 990, 1450, 2100, 3050], note: 'the flip gate + sunset both read the metrics, never the prose.' },
+    {
+      type: 'kanban',
+      heading: 'Support pages',
+      sub: 'planned → earning',
+      columns: [
+        ['Planned', [
+          ['SUP-12', 'searched gap: "…vs fine-tuning"', 'from live queries'],
+        ]],
+        ['Shipped', [
+          ['SUP-11', 'title fix — page ranked, never clicked', 'PR merged'],
+        ]],
+        ['Earning', [
+          ['SUP-9', 'displacement page', '120 clicks/wk'],
+          ['SUP-7', 'supporting article', 'out-earns the guide'],
+        ]],
+      ],
+    },
   ],
 }
 
 export const FLOWS: Record<string, FlowSpec> = {
   'support-triage': SUPPORT_TRIAGE,
   'reddit-karma': REDDIT_KARMA,
-  'seo-scout': SEO_SCOUT,
+  'seo-try-keywords': KEYWORD_BETS,
+  'seo-scale-keywords': KEYWORD_DOUBLE_DOWN,
   'react-doctor': REACT_DOCTOR,
   'docs-sweep': DOCS_SWEEP,
   'error-sweep': ERROR_SWEEP,
